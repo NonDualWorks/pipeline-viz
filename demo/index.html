@@ -1,0 +1,967 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>Pipeline Viz — Three-Tier GSAP POC</title>
+
+<!-- UMD scripts — work from file:// no module issues -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/gsap.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/js-yaml@4/dist/js-yaml.min.js"></script>
+<!-- Lit as UMD via unpkg standalone build -->
+<script src="https://cdn.jsdelivr.net/npm/lit@3/all.min.js" type="module"></script>
+
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#09090b;--surface:#18181b;--surface-high:#27272a;
+  --border:rgba(255,255,255,0.08);--text:#f4f4f5;--muted:#a1a1aa;--subtle:#71717a;
+  --accent:#10b981;--accent-dim:rgba(16,185,129,0.12);
+  --font-sans:'IBM Plex Sans',ui-sans-serif,system-ui,sans-serif;
+  --font-mono:'JetBrains Mono',ui-monospace,monospace;
+  --shadow:0 0 0 1px rgba(255,255,255,0.05),0 4px 6px -1px rgba(0,0,0,0.5),0 20px 40px -8px rgba(0,0,0,0.6);
+}
+body{background:var(--bg);color:var(--text);font-family:var(--font-sans);min-height:100vh}
+.nav{position:sticky;top:0;z-index:100;background:rgba(9,9,11,.9);backdrop-filter:blur(12px);border-bottom:1px solid var(--border);padding:0 24px;height:52px;display:flex;align-items:center;justify-content:space-between}
+.nav-left{display:flex;align-items:center;gap:10px}
+.nav-dot{width:8px;height:8px;border-radius:50%;background:var(--accent);box-shadow:0 0 8px var(--accent)}
+.nav-title{font-size:15px;font-weight:600;letter-spacing:-.02em}
+.nav-badge{font-size:11px;font-family:var(--font-mono);background:var(--surface-high);border:1px solid var(--border);padding:2px 10px;border-radius:4px;color:var(--subtle)}
+.main{max-width:900px;margin:0 auto;padding:40px 24px 80px;display:flex;flex-direction:column;gap:28px}
+.sec-title{font-size:10px;font-family:var(--font-mono);color:var(--subtle);text-transform:uppercase;letter-spacing:.1em;margin-bottom:10px}
+/* Tier diagram */
+.tier-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+.tier-card{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:14px 16px;display:flex;flex-direction:column;gap:6px}
+.tier-num{font-size:9px;font-family:var(--font-mono);color:var(--subtle);text-transform:uppercase;letter-spacing:.08em}
+.tier-name{font-size:14px;font-weight:600;color:var(--text)}
+.tier-file{font-size:11px;font-family:var(--font-mono);color:var(--accent)}
+.tier-row{font-size:11px;color:var(--muted);display:flex;gap:6px;line-height:1.5}
+.tier-row b{color:var(--subtle);font-weight:400;flex-shrink:0}
+/* Controls */
+.ctrl-panel{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px 20px;display:flex;align-items:center;gap:16px;flex-wrap:wrap;box-shadow:var(--shadow)}
+.ctrl-group{display:flex;align-items:center;gap:8px}
+.ctrl-lbl{font-size:10px;font-family:var(--font-mono);color:var(--subtle);text-transform:uppercase;letter-spacing:.06em}
+.pill-grp{display:flex;gap:2px;background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:2px}
+.pill{font-size:11px;font-family:var(--font-mono);padding:4px 10px;border-radius:4px;border:1px solid transparent;cursor:pointer;background:transparent;color:var(--subtle);transition:all .15s}
+.pill.on{background:var(--surface);border-color:var(--border);color:var(--accent)}
+.pill:hover:not(.on){color:var(--text)}
+.spd-slider{-webkit-appearance:none;appearance:none;width:110px;height:4px;border-radius:2px;background:linear-gradient(to right,var(--accent) 0%,var(--accent) 50%,var(--surface-high) 50%);outline:none;cursor:pointer}
+.spd-slider::-webkit-slider-thumb{-webkit-appearance:none;width:14px;height:14px;border-radius:50%;background:var(--accent);cursor:pointer;box-shadow:0 0 4px rgba(16,185,129,.5)}
+.spd-val{font-size:11px;font-family:var(--font-mono);color:var(--accent);min-width:30px}
+.btn{font-size:11px;font-family:var(--font-mono);color:var(--muted);background:var(--surface-high);border:1px solid var(--border);padding:5px 12px;border-radius:6px;cursor:pointer;transition:all .15s}
+.btn:hover{color:var(--text)}
+.btn-adv{color:var(--accent);background:var(--accent-dim);border-color:rgba(16,185,129,.3);display:none}
+.btn-adv.show{display:inline-flex;align-items:center;gap:5px}
+/* Scenario tabs */
+.sc-tabs{display:flex;gap:4px;flex-wrap:wrap}
+.sc-tab{display:flex;flex-direction:column;align-items:center;gap:1px;padding:6px 14px;border-radius:6px;cursor:pointer;background:var(--surface-high);color:var(--subtle);border:1px solid transparent;transition:all .15s;font-family:var(--font-mono)}
+.sc-tab.on{background:var(--surface);border-color:var(--border);color:var(--accent)}
+.sc-tab:hover:not(.on){color:var(--text)}
+.sc-name{font-size:11px;font-weight:600}
+.sc-sub{font-size:9px;opacity:.6}
+/* Status */
+.status{display:flex;align-items:center;gap:10px;padding:8px 14px;background:var(--surface-high);border:1px solid var(--border);border-radius:8px;font-family:var(--font-mono);font-size:11px;transition:all .3s}
+.s-dot{width:7px;height:7px;border-radius:50%;flex-shrink:0;background:#3d3d3d;transition:background .3s}
+.s-txt{color:var(--muted)}
+.status.ok{border-color:rgba(17,197,96,.2);background:rgba(17,197,96,.05)}
+.status.ok .s-txt{color:#11c560}
+.status.fail{border-color:rgba(237,75,53,.2);background:rgba(237,75,53,.05)}
+.status.fail .s-txt{color:#ed4b35}
+/* Pipeline wrapper */
+.pl-wrap{background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow:hidden;box-shadow:var(--shadow)}
+/* Event log */
+.evlog{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:12px 16px;max-height:150px;overflow-y:auto;font-family:var(--font-mono);font-size:11px;display:flex;flex-direction:column;gap:2px}
+@keyframes pv-spin{to{transform:rotate(360deg)}}
+@keyframes pv-pulse{0%,100%{opacity:1}50%{opacity:.3}}
+@keyframes pv-gate-pulse{0%,100%{box-shadow:0 0 8px rgba(251,191,36,.4)}50%{box-shadow:0 0 18px rgba(251,191,36,.7)}}
+.g-dot-j{width:7px;height:7px;border-radius:50%;border:1.5px solid #fbbf24;background:transparent;flex-shrink:0}
+
+/* Pipeline component styles (injected into light DOM since we skip Shadow DOM for simplicity) */
+.pv-root{font-family:var(--font-mono)}
+.pv-header{padding:7px 14px;background:var(--surface-high);border-bottom:1px solid var(--border);display:flex;align-items:center;gap:6px}
+.pv-dot{width:6px;height:6px;border-radius:50%;flex-shrink:0}
+.pv-team{font-size:10px;font-weight:600;color:var(--text)}
+.pv-sep{font-size:10px;color:var(--subtle)}
+.pv-name{font-size:10px;color:var(--muted)}
+.pv-svg-scroll{overflow-x:auto;padding:16px}
+.pv-svg-scroll svg{display:block;overflow:visible}
+/* Job boxes inside SVG foreignObject */
+.job-box{border:2px solid #3d3d3d;border-radius:5px;overflow:hidden;background:var(--surface);transition:border-color .3s}
+.job-header{padding:4px 8px;background:rgba(0,0,0,.2);border-bottom:1px solid rgba(255,255,255,.05);display:flex;align-items:center;gap:5px;transition:background .3s}
+.state-wrap{width:10px;height:10px;position:relative;flex-shrink:0;display:flex;align-items:center;justify-content:center}
+.s-dot-j{width:7px;height:7px;border-radius:2px;background:#3d3d3d;transition:background .3s,border-radius .2s}
+.spinner-j{width:9px;height:9px;border-radius:50%;border:1.5px solid rgba(245,166,35,.25);border-top-color:#f5a623;position:absolute;opacity:0;animation:pv-spin .7s linear infinite}
+.job-name-j{font-size:10px;font-weight:600;color:#71717a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:90px;transition:color .3s}
+.job-steps-j{padding:4px 6px;display:flex;flex-direction:column;gap:1px}
+.step-row-j{display:flex;align-items:center;gap:4px;padding:2px 3px;border-radius:3px;opacity:.25;transition:opacity .2s,background .2s}
+.rc-dot-j{width:7px;height:7px;border-radius:50%;flex-shrink:0}
+.t-dot-j{width:5px;height:5px;border-radius:1px;background:#3d3d3d;flex-shrink:0;margin:1px}
+.step-lbl-j{font-size:8px;color:#71717a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:96px;transition:color .2s}
+.pv-legend{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:6px 14px;background:var(--surface-high);border-top:1px solid var(--border);font-size:9px}
+.leg-t{color:var(--subtle);text-transform:uppercase;letter-spacing:.06em}
+.leg-i{display:flex;align-items:center;gap:4px}
+.leg-d{width:7px;height:7px;border-radius:2px}
+.leg-d.rnd{border-radius:50%}
+.leg-i span{color:var(--subtle)}
+</style>
+</head>
+<body>
+
+<nav class="nav">
+  <div class="nav-left">
+    <div class="nav-dot"></div>
+    <span class="nav-title">Pipeline Viz</span>
+    <span class="nav-badge">Three-Tier GSAP POC</span>
+  </div>
+</nav>
+
+<div class="main">
+
+  <!-- Tier diagram -->
+  <section>
+    <div class="sec-title">Architecture — three tiers</div>
+    <div class="tier-grid">
+      <div class="tier-card">
+        <div class="tier-num">Tier 1</div>
+        <div class="tier-name">Data</div>
+        <div class="tier-file">parser.js</div>
+        <div class="tier-row"><b>in</b> Concourse YAML</div>
+        <div class="tier-row"><b>out</b> viz.json shape</div>
+        <div class="tier-row"><b>dep</b> js-yaml only</div>
+        <div class="tier-row"><b>knows</b> nothing about DOM</div>
+      </div>
+      <div class="tier-card">
+        <div class="tier-num">Tier 2</div>
+        <div class="tier-name">Component</div>
+        <div class="tier-file">pipeline-viz.js (Lit)</div>
+        <div class="tier-row"><b>in</b> viz.json as property</div>
+        <div class="tier-row"><b>out</b> DOM + data-* attrs</div>
+        <div class="tier-row"><b>emits</b> pv:state-change</div>
+        <div class="tier-row"><b>knows</b> nothing about motion</div>
+      </div>
+      <div class="tier-card">
+        <div class="tier-num">Tier 3</div>
+        <div class="tier-name">Animation</div>
+        <div class="tier-file">pipeline-anim.js (GSAP)</div>
+        <div class="tier-row"><b>in</b> DOM elements + events</div>
+        <div class="tier-row"><b>drives</b> GSAP timeline</div>
+        <div class="tier-row"><b>exposes</b> timeScale, pause, seek</div>
+        <div class="tier-row"><b>knows</b> nothing about data</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Controls -->
+  <section>
+    <div class="sec-title">Animation controls — GSAP timeScale</div>
+    <div class="ctrl-panel">
+      <div class="ctrl-group">
+        <span class="ctrl-lbl">speed</span>
+        <input type="range" class="spd-slider" id="spd" min="0.2" max="3" step="0.1" value="1"/>
+        <span class="spd-val" id="spd-val">1×</span>
+      </div>
+      <div class="ctrl-group">
+        <div class="pill-grp" id="spd-presets">
+          <button class="pill" data-v="0.4">fast</button>
+          <button class="pill on" data-v="1">normal</button>
+          <button class="pill" data-v="2.5">slow</button>
+        </div>
+      </div>
+      <div class="ctrl-group">
+        <span class="ctrl-lbl">mode</span>
+        <div class="pill-grp" id="mode-grp">
+          <button class="pill on" data-m="auto">auto</button>
+          <button class="pill" data-m="manual">step</button>
+        </div>
+      </div>
+      <button class="btn" id="replay-btn">↺ replay</button>
+      <button class="btn btn-adv" id="adv-btn">▶ next job</button>
+    </div>
+  </section>
+
+  <!-- Scenarios -->
+  <section>
+    <div class="sec-title">Scenarios</div>
+    <div class="sc-tabs" id="sc-tabs">
+      <button class="sc-tab on" data-s="happy">
+        <span class="sc-name">Happy path</span>
+        <span class="sc-sub">both pass → scan runs</span>
+      </button>
+      <button class="sc-tab" data-s="one-fail">
+        <span class="sc-name">One fails</span>
+        <span class="sc-sub">unit-tests ✗ → blocked</span>
+      </button>
+      <button class="sc-tab" data-s="both-fail">
+        <span class="sc-name">Both fail</span>
+        <span class="sc-sub">all tests ✗ → blocked</span>
+      </button>
+    </div>
+  </section>
+
+  <!-- Developer journey scenarios -->
+  <section>
+    <div class="sec-title">Scenarios — Developer journey (gate + fan-out)</div>
+    <div class="sc-tabs" id="sc-tabs-dj">
+      <button class="sc-tab" data-s="dj-happy">
+        <span class="sc-name">Dev journey</span>
+        <span class="sc-sub">gates approve · all pass</span>
+      </button>
+      <button class="sc-tab" data-s="dj-gate-reject">
+        <span class="sc-name">Gate rejected</span>
+        <span class="sc-sub">code-review ✗</span>
+      </button>
+      <button class="sc-tab" data-s="dj-test-fail">
+        <span class="sc-name">Test fails</span>
+        <span class="sc-sub">unit-tests ✗ → full feedback</span>
+      </button>
+    </div>
+  </section>
+
+  <!-- Status -->
+  <div class="status" id="status">
+    <div class="s-dot" id="s-dot"></div>
+    <span class="s-txt" id="s-txt">initialising…</span>
+  </div>
+
+  <!-- Pipeline (Tier 2 rendered here) -->
+  <section>
+    <div class="sec-title">Live pipeline animation</div>
+    <div class="pl-wrap" id="pl-wrap">
+      <div class="pv-root" id="pv-root"></div>
+    </div>
+  </section>
+
+  <!-- Event log -->
+  <section>
+    <div class="sec-title">Event log — pv:state-change (Tier 2 → Tier 3 interface)</div>
+    <div class="evlog" id="evlog">
+      <div style="color:var(--subtle)">Waiting for events…</div>
+    </div>
+  </section>
+
+</div>
+
+<script>
+// ══════════════════════════════════════════════════════════════════
+// TIER 1 — DATA (viz.json output shape, inlined for CDN POC)
+// In production: parsePipeline(yamlString) from parser.js
+// ══════════════════════════════════════════════════════════════════
+const RC_COLORS = {
+  git:'#f5a623', image:'#38bdf8', 's3':'#fbbf24',
+  semver:'#a78bfa', notify:'#10b981', unknown:'#71717a'
+}
+
+const SCENARIOS = {
+  happy: {
+    name:'java-gradle-parallel', team:'app-dev', color:'#10b981',
+    jobs:[
+      { name:'unit-tests', parallelGroup:'tests', row:0, duration:1600,
+        steps:[
+          {label:'get: app-source',    type:'resource',resource_type:'git'},
+          {label:'task: gradle test',  type:'task'},
+          {label:'task: junit report', type:'task'},
+        ]},
+      { name:'integ-tests', parallelGroup:'tests', row:1, duration:2600,
+        steps:[
+          {label:'get: app-source',     type:'resource',resource_type:'git'},
+          {label:'task: start testenv', type:'task'},
+          {label:'task: integ suite',   type:'task'},
+          {label:'task: teardown',      type:'task'},
+        ]},
+      { name:'scan', depends_on:['unit-tests','integ-tests'], duration:2200,
+        steps:[
+          {label:'get: app-source',       type:'resource',resource_type:'git'},
+          {label:'task: trivy scan',      type:'task'},
+          {label:'task: compliance gate', type:'task'},
+        ]},
+      { name:'publish', depends_on:['scan'], duration:1600,
+        steps:[
+          {label:'task: build image',type:'task'},
+          {label:'put: app-image',   type:'resource',resource_type:'image'},
+        ]},
+    ]
+  }
+}
+// Failure variants
+SCENARIOS['one-fail']   = { ...SCENARIOS.happy, name:'java-gradle-unit-fail',
+  jobs:[ {...SCENARIOS.happy.jobs[0],failAtStep:1}, ...SCENARIOS.happy.jobs.slice(1) ]}
+SCENARIOS['both-fail']  = { ...SCENARIOS.happy, name:'java-gradle-both-fail',
+  jobs:[ {...SCENARIOS.happy.jobs[0],failAtStep:1}, {...SCENARIOS.happy.jobs[1],failAtStep:2},
+         ...SCENARIOS.happy.jobs.slice(2) ]}
+
+// ── DEVELOPER JOURNEY SCENARIOS ──────────────────────────
+const DJ_BASE = {
+  name:'developer-journey', team:'platform', color:'#a78bfa',
+  jobs:[
+    { name:'code-push', duration:800,
+      steps:[
+        {label:'get: source',type:'resource',resource_type:'git'},
+        {label:'task: lint',type:'task'},
+      ]},
+    { name:'unit-tests', parallelGroup:'tests', row:0, depends_on:['code-push'], duration:1600,
+      steps:[
+        {label:'get: source',type:'resource',resource_type:'git'},
+        {label:'task: unit suite',type:'task'},
+        {label:'task: coverage',type:'task'},
+      ]},
+    { name:'integ-tests', parallelGroup:'tests', row:1, depends_on:['code-push'], duration:2200,
+      steps:[
+        {label:'get: source',type:'resource',resource_type:'git'},
+        {label:'task: start env',type:'task'},
+        {label:'task: integ suite',type:'task'},
+        {label:'task: teardown',type:'task'},
+      ]},
+    { name:'code-review', depends_on:['unit-tests','integ-tests'], duration:1200, gate:'approval', gateDelay:2000,
+      steps:[
+        {label:'gate: approval',type:'gate'},
+        {label:'task: merge check',type:'task'},
+      ]},
+    { name:'build-image', depends_on:['code-review'], duration:1400,
+      steps:[
+        {label:'task: docker build',type:'task'},
+        {label:'put: app-image',type:'resource',resource_type:'image'},
+      ]},
+    { name:'deploy-dev', depends_on:['build-image'], duration:1200,
+      steps:[
+        {label:'get: app-image',type:'resource',resource_type:'image'},
+        {label:'task: helm upgrade',type:'task'},
+        {label:'task: health check',type:'task'},
+      ]},
+    { name:'smoke-tests', parallelGroup:'qa', row:0, depends_on:['deploy-dev'], duration:1800,
+      steps:[
+        {label:'task: smoke suite',type:'task'},
+        {label:'task: api checks',type:'task'},
+      ]},
+    { name:'qa-signoff', parallelGroup:'qa', row:1, depends_on:['deploy-dev'], duration:2200, gate:'approval', gateDelay:1800,
+      steps:[
+        {label:'gate: approval',type:'gate'},
+        {label:'task: qa checklist',type:'task'},
+      ]},
+    { name:'deploy-staging', depends_on:['smoke-tests','qa-signoff'], duration:1400,
+      steps:[
+        {label:'get: app-image',type:'resource',resource_type:'image'},
+        {label:'task: helm upgrade',type:'task'},
+        {label:'task: verify',type:'task'},
+      ]},
+    { name:'deploy-prod', depends_on:['deploy-staging'], duration:1600,
+      steps:[
+        {label:'get: app-image',type:'resource',resource_type:'image'},
+        {label:'task: helm upgrade',type:'task'},
+        {label:'task: health check',type:'task'},
+        {label:'put: notify',type:'resource',resource_type:'notify'},
+      ]},
+    { name:'notify-slack', fanOutGroup:'notify', row:0, depends_on:['deploy-prod'], duration:800,
+      steps:[
+        {label:'put: slack',type:'resource',resource_type:'notify'},
+      ]},
+    { name:'update-dashboard', fanOutGroup:'notify', row:1, depends_on:['deploy-prod'], duration:1000,
+      steps:[
+        {label:'task: update metrics',type:'task'},
+        {label:'put: dashboard',type:'resource',resource_type:'notify'},
+      ]},
+  ]
+}
+SCENARIOS['dj-happy'] = DJ_BASE
+SCENARIOS['dj-gate-reject'] = { ...DJ_BASE, name:'dj-gate-rejected',
+  jobs: DJ_BASE.jobs.map(j => j.name==='code-review' ? {...j, failAtStep:0} : j) }
+SCENARIOS['dj-test-fail'] = { ...DJ_BASE, name:'dj-test-fails',
+  jobs: DJ_BASE.jobs.map(j => j.name==='unit-tests' ? {...j, failAtStep:1} : j) }
+
+// ══════════════════════════════════════════════════════════════════
+// TIER 2 — COMPONENT (plain JS DOM builder, no framework needed for POC)
+// Renders pipeline to DOM with data-* attributes
+// Emits pv:state-change custom events
+// In production: swap for Lit custom element (pipeline-viz.js)
+// ══════════════════════════════════════════════════════════════════
+const host = document.getElementById('pl-wrap')
+
+const PipelineComponent = {
+  _data: null,
+  _js: {},    // job states
+  _ss: {},    // step states
+
+  // ── Public API (Tier 3 calls these) ──
+  setJobState(name, state) {
+    const from = this._js[name] || 'idle'
+    if (from === state) return
+    this._js[name] = state
+    const el = document.querySelector(`[data-job="${name}"]`)
+    if (el) el.dataset.state = state
+    host.dispatchEvent(new CustomEvent('pv:state-change', {
+      detail:{ job:name, step:null, from, to:state }, bubbles:true
+    }))
+  },
+
+  setStepState(name, si, state) {
+    const key = `${name}:${si}`
+    const from = this._ss[key] || 'idle'
+    if (from === state) return
+    this._ss[key] = state
+    const el = document.querySelector(`[data-job="${name}"] [data-step="${si}"]`)
+    if (el) el.dataset.state = state
+    host.dispatchEvent(new CustomEvent('pv:state-change', {
+      detail:{ job:name, step:si, from, to:state }, bubbles:true
+    }))
+  },
+
+  getJobEl(name)     { return document.querySelector(`[data-job="${name}"]`) },
+  getStepEl(name,si) { return document.querySelector(`[data-job="${name}"] [data-step="${si}"]`) },
+  getJobs()          { return this._data?.jobs || [] },
+
+  resetStates() {
+    this._js = {}; this._ss = {}
+    document.querySelectorAll('[data-state]').forEach(el => el.dataset.state='idle')
+  },
+
+  // ── Render ──
+  render(data) {
+    this._data = data; this._js = {}; this._ss = {}
+    host.innerHTML = ''
+    const root = document.createElement('div')
+    root.className = 'pv-root'
+    root.innerHTML = this._buildHTML(data)
+    host.appendChild(root)
+    host.dispatchEvent(new CustomEvent('pv:ready', { detail:{ jobs:data.jobs }, bubbles:true }))
+  },
+
+  _buildHTML(data) {
+    const jobs = data.jobs || []
+    const JW=134, STEP_H=11, JH_BASE=20, JH_MIN=44, CGAP=64, RGAP=18, RC=6, PX=36, PY=28
+    const jh = j => Math.max(JH_MIN, JH_BASE + (j.steps?.length||0)*STEP_H + 4)
+
+    // Group into columns
+    const seen={}; const cols=[]; const colType=[]
+    jobs.forEach((j,ji) => {
+      const g = j.parallelGroup || j.fanOutGroup || `_${ji}`
+      if(!(g in seen)){
+        seen[g]=cols.length;cols.push([])
+        colType.push(j.parallelGroup?'parallel':j.fanOutGroup?'fanout':'sequential')
+      }
+      cols[seen[g]].push({job:j,ji})
+    })
+    const maxJH = Math.max(...jobs.map(j=>jh(j)), JH_MIN)
+    const maxRows = Math.max(...cols.map(c=>c.length),1)
+    const innerH = maxRows*maxJH + (maxRows-1)*RGAP
+    const H = innerH + PY*2
+    const W = PX + RC*2 + CGAP + cols.length*(JW+CGAP) + RC*2 + PX
+    const colX = ci => PX + RC*2 + CGAP + ci*(JW+CGAP)
+    const srcX = PX+RC, srcY = H/2
+
+    // Job Y positions
+    const jobY = {}
+    cols.forEach((col,ci)=>{
+      const tH = col.length*maxJH + (col.length-1)*RGAP
+      const sY = H/2 - tH/2
+      col.forEach(({ji},ri) => { jobY[ji] = sY + ri*(maxJH+RGAP) })
+    })
+
+    // Job box HTML
+    const jobBoxHTML = (job,ji,x,y,h) => `
+      <div class="job-box" data-job="${job.name}" data-state="idle"
+        style="width:${JW}px;height:${h}px;position:absolute;left:0;top:0">
+        <div class="job-header">
+          <div class="state-wrap">
+            <div class="spinner-j"></div>
+            <div class="s-dot-j"></div>
+          </div>
+          <span class="job-name-j">${job.name}</span>
+        </div>
+        <div class="job-steps-j">
+          ${(job.steps||[]).map((step,si)=>`
+            <div class="step-row-j" data-step="${si}" data-state="idle">
+              ${step.type==='resource'
+                ? `<div class="rc-dot-j" style="background:${RC_COLORS[step.resource_type]||'#71717a'}"></div>`
+                : step.type==='gate'
+                  ? `<div class="g-dot-j"></div>`
+                  : `<div class="t-dot-j"></div>`}
+              <span class="step-lbl-j">${step.label}</span>
+            </div>`).join('')}
+        </div>
+      </div>`
+
+    // SVG paths
+    let pathsSVG = ''
+
+    // Source circle
+    pathsSVG += `<circle data-rc="source" cx="${srcX}" cy="${srcY}" r="${RC}" fill="#3d3d3d"/>`
+
+    cols.forEach((col,ci) => {
+      const cx = colX(ci)
+      const isFanout = colType[ci]==='fanout'
+      // Fork paths
+      col.forEach(({job,ji}) => {
+        const jy = jobY[ji] + maxJH/2
+        const fromX = ci===0 ? srcX+RC : colX(ci)-CGAP/2+RC
+        const fromY = srcY
+        const mx = fromX + (cx-fromX)*0.5
+        const d = `M ${fromX} ${fromY} C ${mx} ${fromY}, ${mx} ${jy}, ${cx} ${jy}`
+        pathsSVG += `<path data-conn-in="${job.name}" d="${d}" fill="none" stroke="#3d3d3d" stroke-width="2" stroke-dasharray="80" stroke-dashoffset="80"/>`
+      })
+
+      // Merge paths + circles (all but last col)
+      if (ci < cols.length-1 && !isFanout) {
+        const mx = cx + JW + CGAP/2
+        col.forEach(({job,ji}) => {
+          const jy = jobY[ji] + maxJH/2
+          const bx = cx+JW + (mx-RC-(cx+JW))*0.5
+          const d = `M ${cx+JW} ${jy} C ${bx} ${jy}, ${bx} ${srcY}, ${mx-RC} ${srcY}`
+          pathsSVG += `<path data-conn-out="${job.name}" d="${d}" fill="none" stroke="#3d3d3d" stroke-width="2" stroke-dasharray="80" stroke-dashoffset="80"/>`
+        })
+        pathsSVG += `<circle data-rc="merge-${ci}" cx="${mx}" cy="${srcY}" r="${RC}" fill="#3d3d3d"/>`
+        pathsSVG += `<line data-conn-bridge="${ci}" x1="${mx+RC}" y1="${srcY}" x2="${colX(ci+1)}" y2="${srcY}" stroke="#3d3d3d" stroke-width="2"/>`
+      } else {
+        // Last col or fan-out: individual outgoing connectors to trail
+        const tx = cx+JW+CGAP/2
+        col.forEach(({job,ji}) => {
+          const jy = jobY[ji] + maxJH/2
+          const bx = cx+JW + (tx-RC-(cx+JW))*0.5
+          const d = `M ${cx+JW} ${jy} C ${bx} ${jy}, ${bx} ${srcY}, ${tx-RC} ${srcY}`
+          pathsSVG += `<path data-conn-out="${job.name}" d="${d}" fill="none" stroke="#3d3d3d" stroke-width="2" stroke-dasharray="80" stroke-dashoffset="80"/>`
+        })
+        if(ci===cols.length-1 || isFanout)
+          pathsSVG += `<circle data-rc="trail" cx="${tx}" cy="${srcY}" r="${RC}" fill="#3d3d3d"/>`
+      }
+    })
+
+    // foreignObjects for job boxes
+    let foSVG = ''
+    jobs.forEach((job,ji) => {
+      const ci = cols.findIndex(c=>c.some(e=>e.ji===ji))
+      const x=colX(ci), y=jobY[ji], h=jh(job)
+      foSVG += `<foreignObject x="${x}" y="${y}" width="${JW}" height="${h}">
+        <div xmlns="http://www.w3.org/1999/xhtml" style="position:relative;width:${JW}px;height:${h}px">
+          ${jobBoxHTML(job,ji,x,y,h)}
+        </div>
+      </foreignObject>`
+      if (job.parallelGroup && job.row===0) {
+        foSVG += `<text x="${x+JW/2}" y="${y-8}" text-anchor="middle" font-size="7" font-family="JetBrains Mono,monospace" fill="#71717a" letter-spacing="1">PARALLEL</text>`
+      }
+      if (job.fanOutGroup && job.row===0) {
+        foSVG += `<text x="${x+JW/2}" y="${y-8}" text-anchor="middle" font-size="7" font-family="JetBrains Mono,monospace" fill="#a78bfa" letter-spacing="1">FAN-OUT</text>`
+      }
+      if (job.gate && !job.parallelGroup) {
+        foSVG += `<text x="${x+JW/2}" y="${y-8}" text-anchor="middle" font-size="7" font-family="JetBrains Mono,monospace" fill="#fbbf24">${job.gate==='approval'?'\u23F8 APPROVAL':'\u23F1 SCHEDULED'}</text>`
+      }
+    })
+
+    const legendHTML = `<div class="pv-legend">
+      <span class="leg-t">states:</span>
+      ${[['idle','#3d3d3d'],['pending','#8b572a'],['gate','#fbbf24'],['running','#f5a623'],['succeeded','#11c560'],['failed','#ed4b35']].map(([l,c])=>
+        `<div class="leg-i"><div class="leg-d" style="background:${c}"></div><span>${l}</span></div>`).join('')}
+      <span class="leg-t" style="margin-left:8px">resources:</span>
+      ${[['git','#f5a623'],['image','#38bdf8'],['s3','#fbbf24']].map(([l,c])=>
+        `<div class="leg-i"><div class="leg-d rnd" style="background:${c}"></div><span>${l}</span></div>`).join('')}
+    </div>`
+
+    return `
+      <div class="pv-header">
+        <div class="pv-dot" style="background:${data.color||'#10b981'}"></div>
+        <span class="pv-team">${data.team||'team'}</span>
+        <span class="pv-sep">/</span>
+        <span class="pv-name">${data.name||'pipeline'}</span>
+      </div>
+      <div class="pv-svg-scroll">
+        <svg width="${W}" height="${H}">
+          ${pathsSVG}${foSVG}
+          <style>@keyframes pv-spin{to{transform:rotate(360deg)}}</style>
+        </svg>
+      </div>
+      ${legendHTML}`
+  }
+}
+
+// ══════════════════════════════════════════════════════════════════
+// TIER 3 — ANIMATION (GSAP)
+// Reads DOM, drives GSAP timeline
+// Knows nothing about data shape
+// ══════════════════════════════════════════════════════════════════
+const VIS = {
+  idle:      {border:'#3d3d3d',header:'rgba(0,0,0,0.2)',      name:'#71717a'},
+  pending:   {border:'#8b572a',header:'rgba(139,87,42,0.10)',  name:'#8b572a'},
+  gate:      {border:'#fbbf24',header:'rgba(251,191,36,0.10)', name:'#fbbf24'},
+  running:   {border:'#f5a623',header:'rgba(245,166,35,0.10)', name:'#f5a623'},
+  succeeded: {border:'#11c560',header:'rgba(17,197,96,0.08)',  name:'#f4f4f5'},
+  failed:    {border:'#ed4b35',header:'rgba(237,75,53,0.08)',  name:'#ed4b35'},
+}
+
+function animJob(comp, name, state) {
+  const el = comp.getJobEl(name); if(!el) return
+  const v = VIS[state]||VIS.idle
+  // Kill gate pulse when leaving gate state
+  if(state!=='gate'&&el._gatePulse){el._gatePulse.kill();delete el._gatePulse;gsap.set(el,{boxShadow:'none'})}
+  gsap.to(el, {borderColor:v.border, duration:.25, ease:'power2.out'})
+  const hdr=el.querySelector('.job-header')
+  if(hdr) gsap.to(hdr,{backgroundColor:v.header,duration:.25})
+  const nm=el.querySelector('.job-name-j')
+  if(nm)  gsap.to(nm,{color:v.name,duration:.25})
+  const sp=el.querySelector('.spinner-j'), dot=el.querySelector('.s-dot-j')
+  if(sp&&dot){
+    if(state==='running'){gsap.to(sp,{opacity:1,duration:.15});gsap.to(dot,{opacity:0,duration:.15})}
+    else{gsap.to(sp,{opacity:0,duration:.15});gsap.to(dot,{opacity:1,duration:.15,backgroundColor:v.border})}
+  }
+  if(state==='gate'){
+    el._gatePulse=gsap.to(el,{boxShadow:'0 0 14px rgba(251,191,36,.6)',repeat:-1,yoyo:true,duration:.6,ease:'sine.inOut'})
+  }
+  if(state==='succeeded'){
+    gsap.timeline().to(el,{scale:1.02,duration:.1,ease:'power2.out'}).to(el,{scale:1,duration:.2,ease:'elastic.out(1,.5)'})
+  }
+  if(state==='failed'){
+    gsap.timeline().to(el,{x:-3,duration:.05}).to(el,{x:3,duration:.05}).to(el,{x:-2,duration:.05}).to(el,{x:0,duration:.05})
+  }
+}
+
+function animStep(comp, name, si, state) {
+  const el=comp.getStepEl(name,si); if(!el) return
+  if(state==='running'){
+    gsap.to(el,{opacity:1,backgroundColor:'rgba(255,255,255,0.03)',duration:.12})
+    const lb=el.querySelector('.step-lbl-j'); if(lb) gsap.to(lb,{color:'#f4f4f5',duration:.12})
+  } else if(state==='done'){
+    gsap.to(el,{opacity:1,backgroundColor:'transparent',duration:.12})
+    const lb=el.querySelector('.step-lbl-j'); if(lb) gsap.to(lb,{color:'#a1a1aa',duration:.12})
+  } else if(state==='failed'){
+    gsap.to(el,{opacity:1,backgroundColor:'rgba(237,75,53,0.06)',duration:.12})
+    const lb=el.querySelector('.step-lbl-j'); if(lb) gsap.to(lb,{color:'#ed4b35',duration:.12})
+  }
+}
+
+function drawConn(selector, color, duration=0.5) {
+  const el = document.querySelector(selector); if(!el) return
+  const len = el.getTotalLength ? el.getTotalLength() : 80
+  gsap.set(el,{strokeDasharray:len,strokeDashoffset:len})
+  gsap.to(el,{strokeDashoffset:0,stroke:color,duration,ease:'power2.inOut'})
+}
+
+function animRC(selector, color, glow=false) {
+  const el=document.querySelector(`[data-rc="${selector}"]`); if(!el) return
+  gsap.to(el,{fill:color,filter:glow?`drop-shadow(0 0 5px ${color})`:'none',duration:.4})
+}
+
+let masterTl=null
+function buildTimeline(comp, jobs, mode, speed, replayDelay, onDone) {
+  const tl = gsap.timeline({paused:true})
+  const jmap={}; jobs.forEach((j,i)=>jmap[j.name]=i)
+  const jEnd={}
+  const gStart={}
+  let cursor=0.4
+
+  // Parallel + fan-out group start alignment
+  jobs.forEach(j=>{
+    const grpKey=j.parallelGroup||j.fanOutGroup
+    if(!grpKey) return
+    let gs=0.4
+    for(const dep of(j.depends_on||[])){
+      const di=jmap[dep]; if(di!==undefined&&jEnd[di]!==undefined) gs=Math.max(gs,jEnd[di]+0.3)
+    }
+    if(gStart[grpKey]===undefined||gs>gStart[grpKey]) gStart[grpKey]=gs
+  })
+
+  jobs.forEach((job,ji)=>{
+    const grpKey=job.parallelGroup||job.fanOutGroup
+    let jstart = grpKey?(gStart[grpKey]??cursor):cursor
+    for(const dep of(job.depends_on||[])){
+      const di=jmap[dep]; if(di!==undefined&&jEnd[di]!==undefined) jstart=Math.max(jstart,jEnd[di]+0.3)
+    }
+    const sc=job.steps?.length||0
+    const jdur=(job.duration||(300+sc*480))/1000
+    const failAt=job.failAtStep??-1
+    const isRb=!!job.triggeredByFailure
+
+    // Gate delay extends the job timeline
+    const gateDelaySec=job.gate?(job.gateDelay||2000)/1000:0
+    const runStart=jstart+gateDelaySec
+    jEnd[ji]=jstart+gateDelaySec+jdur
+
+    // Dep check helper
+    const depFailed=()=>(job.depends_on||[]).some(d=>{const di=jmap[d];return di!==undefined&&comp._js?.[jobs[di]?.name]!=='succeeded'})
+
+    // Pending
+    tl.call(()=>{
+      if(!depFailed()){comp.setJobState(job.name,'pending');animJob(comp,job.name,'pending')}
+    },[],jstart-.2)
+
+    // Draw incoming connector (stroke-dashoffset — free DrawSVG alternative)
+    tl.call(()=>{
+      if(!depFailed()) drawConn(`[data-conn-in="${job.name}"]`,'#f5a623',0.5)
+    },[],jstart-.1)
+
+    // ── Gate phase (if gate job) ──────────────────────────
+    if(job.gate){
+      const gateStepIdx=(job.steps||[]).findIndex(s=>s.type==='gate')
+
+      // Enter gate state
+      tl.call(()=>{
+        if(!depFailed()){
+          comp.setJobState(job.name,'gate');animJob(comp,job.name,'gate')
+          if(gateStepIdx>=0){comp.setStepState(job.name,gateStepIdx,'running');animStep(comp,job.name,gateStepIdx,'running')}
+        }
+      },[],jstart)
+
+      // Gate step fail or approve
+      if(failAt===gateStepIdx){
+        // Gate rejected — fail midway through gate
+        tl.call(()=>{
+          if(comp._js?.[job.name]==='gate'){
+            if(gateStepIdx>=0){comp.setStepState(job.name,gateStepIdx,'failed');animStep(comp,job.name,gateStepIdx,'failed')}
+            comp.setJobState(job.name,'failed');animJob(comp,job.name,'failed')
+            gsap.to(document.querySelector(`[data-conn-out="${job.name}"]`),{stroke:'#ed4b35',duration:.3})
+            // Parallel merge handling for gate fail
+            if(job.parallelGroup){
+              const _seen={}; let _ci=0
+              for(const _j of jobs){const _g=_j.parallelGroup||_j.fanOutGroup||`_${jobs.indexOf(_j)}`;if(!(_g in _seen)){_seen[_g]=_ci++}
+                if(_j.name===job.name){animRC(`merge-${_seen[_g]-1}`,'#ed4b35',true);break}
+              }
+            }
+          }
+        },[],jstart+gateDelaySec*0.5)
+      } else {
+        // Gate approved — transition to running
+        tl.call(()=>{
+          if(comp._js?.[job.name]==='gate'){
+            if(gateStepIdx>=0){comp.setStepState(job.name,gateStepIdx,'done');animStep(comp,job.name,gateStepIdx,'done')}
+            comp.setJobState(job.name,'running');animJob(comp,job.name,'running')
+          }
+        },[],runStart)
+      }
+    } else {
+      // ── Regular running (non-gate) ──────────────────────
+      tl.call(()=>{
+        if(!depFailed()){comp.setJobState(job.name,'running');animJob(comp,job.name,'running')}
+      },[],jstart)
+    }
+
+    if(mode==='manual'&&ji>0) tl.addPause(jstart+.05)
+
+    // ── Steps (skip gate step for gate jobs — already handled above) ──
+    let sc2=runStart+.2
+    const nonGateSteps=(job.steps||[]).map((s,i)=>({step:s,si:i})).filter(({step})=>!(job.gate&&step.type==='gate'))
+    const sd=(jdur-.3)/Math.max(nonGateSteps.length,1)
+    nonGateSteps.forEach(({step,si})=>{
+      const isFailStep=si===failAt
+      tl.call(()=>{
+        if(comp._js?.[job.name]==='running'){comp.setStepState(job.name,si,'running');animStep(comp,job.name,si,'running')}
+      },[],sc2)
+      sc2+=sd*.65
+      if(isFailStep){
+        tl.call(()=>{
+          comp.setStepState(job.name,si,'failed');animStep(comp,job.name,si,'failed')
+          comp.setJobState(job.name,'failed');animJob(comp,job.name,'failed')
+          // Outgoing connector red
+          gsap.to(document.querySelector(`[data-conn-out="${job.name}"]`),{stroke:'#ed4b35',duration:.3})
+          // FULL FEEDBACK: sibling jobs keep running — don't abort them
+          // But immediately turn merge circle red — outcome is already decided
+          if(job.parallelGroup){
+            const seen={}; let ci2=0
+            for(const j2 of jobs){
+              const g2=j2.parallelGroup||j2.fanOutGroup||`_${jobs.indexOf(j2)}`
+              if(!(g2 in seen)){seen[g2]=ci2++}
+              if(j2.name===job.name){
+                const idx=seen[g2]-1
+                // Merge → red immediately, don't wait for siblings
+                animRC(`merge-${idx}`,'#ed4b35',true)
+                // Add "blocked" text below merge circle
+                const mergeEl=document.querySelector(`[data-rc="merge-${idx}"]`)
+                if(mergeEl){
+                  const svg=mergeEl.closest('svg')
+                  if(svg&&!svg.querySelector('[data-blocked]')){
+                    const cx=parseFloat(mergeEl.getAttribute('cx'))
+                    const cy=parseFloat(mergeEl.getAttribute('cy'))
+                    const txt=document.createElementNS('http://www.w3.org/2000/svg','text')
+                    txt.setAttribute('x',cx); txt.setAttribute('y',cy+15)
+                    txt.setAttribute('text-anchor','middle'); txt.setAttribute('font-size','7')
+                    txt.setAttribute('font-family','JetBrains Mono,monospace')
+                    txt.setAttribute('fill','#ed4b35'); txt.setAttribute('data-blocked','1')
+                    txt.textContent='blocked'
+                    svg.appendChild(txt)
+                    gsap.from(txt,{opacity:0,duration:.3})
+                  }
+                }
+                // Bridge line stays dark — downstream never starts
+                const bridge=document.querySelector(`[data-conn-bridge="${idx}"]`)
+                if(bridge) gsap.to(bridge,{stroke:'#3d3d3d',duration:.1})
+                break
+              }
+            }
+          }
+        },[],sc2)
+      } else if(failAt>=0&&si>failAt){
+        // skip — already failed
+      } else {
+        tl.call(()=>{
+          if(comp._js?.[job.name]==='running'){comp.setStepState(job.name,si,'done');animStep(comp,job.name,si,'done')}
+        },[],sc2)
+        sc2+=sd*.35
+      }
+    })
+
+    // Succeed (only if no failure configured)
+    if(failAt<0){
+        tl.call(()=>{
+          if(depFailed()) return
+          comp.setJobState(job.name,'succeeded');animJob(comp,job.name,'succeeded')
+          // Draw outgoing connector
+          drawConn(`[data-conn-out="${job.name}"]`,'#11c560',0.5)
+          // Parallel group: only turn green when ALL siblings done AND none failed
+          // Fan-out: skip merge evaluation — each job is independent
+          if(job.parallelGroup && !job.fanOutGroup){
+            const grp=jobs.filter(j=>j.parallelGroup===job.parallelGroup)
+            const allOk=grp.every(g=>comp._js?.[g.name]==='succeeded')
+            const anyFail=grp.some(g=>comp._js?.[g.name]==='failed')
+            const allDone=grp.every(g=>['succeeded','failed'].includes(comp._js?.[g.name]))
+            // Guard: only evaluate merge when all siblings have finished
+            if(!allDone) return
+            const seen={}; let ci=0
+            for(const j of jobs){
+              const g=j.parallelGroup||j.fanOutGroup||`_${jobs.indexOf(j)}`
+              if(!(g in seen)){seen[g]=ci++}
+              if(j.name===job.name){
+                const idx=seen[g]-1
+                if(allOk&&!anyFail){
+                  animRC(`merge-${idx}`,'#11c560',true)
+                  gsap.to(document.querySelector(`[data-conn-bridge="${idx}"]`),{stroke:'#11c560',duration:.4})
+                }
+                break
+              }
+            }
+          }
+          // Fan-out: no merge, each job independently draws outgoing connector (already done above)
+        },[],jEnd[ji])
+    }
+
+    if(!job.parallelGroup && !job.fanOutGroup) cursor=jstart+.2
+  })
+
+  // Done
+  const totalEnd=Math.max(...Object.values(jEnd),cursor)+.4
+  tl.call(()=>{
+    const anyFail=Object.values(comp._js||{}).some(s=>s==='failed')
+    animRC('trail',anyFail?'#ed4b35':'#38bdf8',!anyFail)
+    if(onDone) onDone({success:!anyFail})
+    if(mode==='auto') setTimeout(startAnim,replayDelay)
+  },[],totalEnd)
+
+  return tl
+}
+
+// ══════════════════════════════════════════════════════════════════
+// WIRING — connects all three tiers
+// ══════════════════════════════════════════════════════════════════
+let currentScenario='happy', currentMode='auto', currentSpeed=1.0
+const evlog = document.getElementById('evlog')
+const statusEl = document.getElementById('status')
+const sDot = document.getElementById('s-dot')
+const sTxt = document.getElementById('s-txt')
+const advBtn = document.getElementById('adv-btn')
+
+function setStatus(state,text){
+  sTxt.textContent=text
+  statusEl.className='status '+(state==='succeeded'?'ok':state==='failed'?'fail':'')
+  const c={idle:'#3d3d3d',running:'#f5a623',succeeded:'#11c560',failed:'#ed4b35'}[state]||'#3d3d3d'
+  gsap.to(sDot,{backgroundColor:c,duration:.3})
+  sDot.style.animation=state==='running'?'pv-pulse .8s ease-in-out infinite':''
+}
+
+function logEv(detail){
+  const entry=document.createElement('div')
+  const c=detail.to==='running'?'#f5a623':detail.to==='succeeded'?'#11c560':detail.to==='failed'?'#ed4b35':'#71717a'
+  const what=detail.step!=null?`${detail.job} step[${detail.step}]`:detail.job
+  const t=new Date().toLocaleTimeString('en',{hour12:false,hour:'2-digit',minute:'2-digit',second:'2-digit'})
+  entry.innerHTML=`<span style="color:#71717a">${t}</span>  <span style="color:${c}">${detail.to}</span>  <span style="color:#a1a1aa">${what}</span>`
+  if(evlog.children.length===1&&evlog.children[0].style?.color) evlog.innerHTML=''
+  evlog.appendChild(entry)
+  evlog.scrollTop=evlog.scrollHeight
+}
+
+function startAnim(){
+  masterTl?.kill()
+  PipelineComponent.resetStates()
+  setStatus('running','running…')
+  advBtn.classList.remove('show')
+  const jobs = PipelineComponent.getJobs()
+  masterTl = buildTimeline(PipelineComponent, jobs, currentMode, currentSpeed, 3500, ({success})=>{
+    if(success){
+      setStatus('succeeded','✓ pipeline succeeded')
+    } else {
+      const failed=Object.entries(PipelineComponent._js||{}).filter(([,v])=>v==='failed').map(([k])=>k)
+      setStatus('failed',`✗ ${failed.join(', ')} failed · full feedback collected · fix and re-run`)
+    }
+  })
+  masterTl.timeScale(currentSpeed).play()
+}
+
+function loadScenario(key){
+  currentScenario=key
+  PipelineComponent.render(SCENARIOS[key])
+}
+
+// Events from Tier 2
+host.addEventListener('pv:ready', ()=>startAnim())
+host.addEventListener('pv:state-change', e=>{
+  logEv(e.detail)
+  if(e.detail.to==='running'&&e.detail.step===null) setStatus('running','running…')
+})
+
+// Manual advance
+advBtn.addEventListener('click',()=>{masterTl?.resume();advBtn.classList.remove('show')})
+
+// Speed slider
+const spdEl=document.getElementById('spd'), spdVal=document.getElementById('spd-val')
+spdEl.addEventListener('input',e=>{
+  currentSpeed=parseFloat(e.target.value)
+  spdVal.textContent=`${currentSpeed.toFixed(1)}×`
+  masterTl?.timeScale(currentSpeed)
+  const pct=((currentSpeed-.2)/(3-.2))*100
+  e.target.style.background=`linear-gradient(to right,var(--accent) 0%,var(--accent) ${pct}%,var(--surface-high) ${pct}%)`
+  document.querySelectorAll('#spd-presets .pill').forEach(b=>b.classList.remove('on'))
+})
+document.querySelectorAll('#spd-presets .pill').forEach(btn=>{
+  btn.addEventListener('click',()=>{
+    const v=parseFloat(btn.dataset.v)
+    currentSpeed=v; spdEl.value=v; spdVal.textContent=`${v}×`
+    const pct=((v-.2)/(3-.2))*100
+    spdEl.style.background=`linear-gradient(to right,var(--accent) 0%,var(--accent) ${pct}%,var(--surface-high) ${pct}%)`
+    masterTl?.timeScale(v)
+    document.querySelectorAll('#spd-presets .pill').forEach(b=>b.classList.remove('on'))
+    btn.classList.add('on')
+  })
+})
+
+// Mode
+document.querySelectorAll('#mode-grp .pill').forEach(btn=>{
+  btn.addEventListener('click',()=>{
+    currentMode=btn.dataset.m
+    document.querySelectorAll('#mode-grp .pill').forEach(b=>b.classList.remove('on'))
+    btn.classList.add('on')
+    startAnim()
+  })
+})
+
+// In manual mode, show advance button when timeline pauses
+const origPause = gsap.globalTimeline.pause
+setInterval(()=>{
+  if(currentMode==='manual'&&masterTl&&masterTl.paused()&&!masterTl.isActive()){
+    // Timeline paused at an addPause() point
+    advBtn.classList.add('show')
+  }
+},200)
+
+// Scenarios — deselect across both tab groups on click
+function activateScenarioTab(tab){
+  document.querySelectorAll('#sc-tabs .sc-tab, #sc-tabs-dj .sc-tab').forEach(t=>t.classList.remove('on'))
+  tab.classList.add('on')
+  loadScenario(tab.dataset.s)
+}
+document.querySelectorAll('#sc-tabs .sc-tab').forEach(tab=>{
+  tab.addEventListener('click',()=>activateScenarioTab(tab))
+})
+document.querySelectorAll('#sc-tabs-dj .sc-tab').forEach(tab=>{
+  tab.addEventListener('click',()=>activateScenarioTab(tab))
+})
+
+// Replay
+document.getElementById('replay-btn').addEventListener('click',startAnim)
+
+// Bootstrap — load initial scenario
+loadScenario('happy')
+</script>
+</body>
+</html>
