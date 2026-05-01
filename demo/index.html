@@ -217,6 +217,29 @@ body{background:var(--bg);color:var(--text);font-family:var(--font-sans);min-hei
     </div>
   </section>
 
+  <!-- Java Library Publish scenarios (zones + gateActor) -->
+  <section>
+    <div class="sec-title">Scenarios — Java Library Publish (zones + gateActor + gate vocabulary)</div>
+    <div class="sc-tabs" id="sc-tabs-jl">
+      <button class="sc-tab" data-s="jl-happy">
+        <span class="sc-name">Happy path</span>
+        <span class="sc-sub">PR ✓ → release published</span>
+      </button>
+      <button class="sc-tab" data-s="jl-build-fail">
+        <span class="sc-name">Build fails</span>
+        <span class="sc-sub">compile ✗ → blocked</span>
+      </button>
+      <button class="sc-tab" data-s="jl-security-block">
+        <span class="sc-name">Security blocked</span>
+        <span class="sc-sub">scan finds CVE ✗</span>
+      </button>
+      <button class="sc-tab" data-s="jl-review-reject">
+        <span class="sc-name">Review rejected</span>
+        <span class="sc-sub">code review ✗</span>
+      </button>
+    </div>
+  </section>
+
   <!-- Status -->
   <div class="status" id="status">
     <div class="s-dot" id="s-dot"></div>
@@ -367,6 +390,127 @@ SCENARIOS['dj-gate-reject'] = { ...DJ_BASE, name:'dj-gate-rejected',
 SCENARIOS['dj-test-fail'] = { ...DJ_BASE, name:'dj-test-fails',
   jobs: DJ_BASE.jobs.map(j => j.name==='unit-tests' ? {...j, failAtStep:1} : j) }
 
+// ── JAVA LIBRARY PUBLISH SCENARIOS (zones + gateActor + gate vocabulary) ──
+const JL_BASE = {
+  name:'java-lib-publish', team:'platform', color:'#a78bfa',
+  zones:[
+    { id:'pr', label:'PR \u2014 Feature Branch', color:'#38bdf8' },
+    { id:'release', label:'Release \u2014 Main Branch', color:'#10b981' },
+  ],
+  jobs:[
+    // ── PR ZONE ──
+    { name:'pr-triggered', zone:'pr', duration:600,
+      steps:[
+        {label:'get: source',type:'resource',resource_type:'git'},
+      ]},
+    { name:'compile-and-test', zone:'pr', parallelGroup:'checks', row:0,
+      depends_on:['pr-triggered'], duration:2200,
+      steps:[
+        {label:'task: gradle build',type:'task'},
+        {label:'task: unit tests',type:'task'},
+        {label:'task: test report',type:'task'},
+      ]},
+    { name:'code-quality', zone:'pr', parallelGroup:'checks', row:1,
+      depends_on:['pr-triggered'], duration:1600,
+      steps:[
+        {label:'task: checkstyle',type:'task'},
+        {label:'task: spotbugs',type:'task'},
+      ]},
+    { name:'publish-snapshot', zone:'pr',
+      depends_on:['compile-and-test','code-quality'], duration:1400,
+      steps:[
+        {label:'task: gradle publish',type:'task'},
+        {label:'put: snapshot-jar',type:'resource',resource_type:'s3'},
+      ]},
+    { name:'report-status', zone:'pr', parallelGroup:'verify', row:0,
+      depends_on:['publish-snapshot'], duration:600,
+      steps:[
+        {label:'task: POST status \u2192 SCM',type:'task'},
+      ]},
+    { name:'security-scan', zone:'pr', parallelGroup:'verify', row:1,
+      depends_on:['publish-snapshot'], duration:2000,
+      steps:[
+        {label:'task: trigger scan API',type:'task'},
+        {label:'task: poll results',type:'task'},
+      ]},
+    { name:'review-gate', zone:'pr',
+      depends_on:['report-status','security-scan'],
+      duration:1000, gate:'approval', gateDelay:2500,
+      gateActor:'Reviewers', gateActorColor:'#f472b6',
+      steps:[
+        {label:'gate: code review',type:'gate'},
+        {label:'task: review checklist',type:'task'},
+      ]},
+    { name:'consumer-test', zone:'pr',
+      depends_on:['review-gate'], duration:1800,
+      steps:[
+        {label:'get: snapshot-jar',type:'resource',resource_type:'s3'},
+        {label:'task: include in downstream',type:'task'},
+        {label:'task: gradle test',type:'task'},
+      ]},
+    { name:'merge-approval', zone:'pr',
+      depends_on:['consumer-test'],
+      duration:800, gate:'approval', gateDelay:2000,
+      gateActor:'CODEOWNERS', gateActorColor:'#60a5fa',
+      steps:[
+        {label:'gate: team approval',type:'gate'},
+      ]},
+    // ── RELEASE ZONE ──
+    { name:'merge-triggered', zone:'release',
+      depends_on:['merge-approval'], duration:600,
+      steps:[
+        {label:'get: source (main)',type:'resource',resource_type:'git'},
+      ]},
+    { name:'rebase-check', zone:'release',
+      depends_on:['merge-triggered'], duration:800,
+      steps:[
+        {label:'task: check rebase needed',type:'task'},
+        {label:'task: fast-forward merge',type:'task'},
+      ]},
+    { name:'release-build', zone:'release', parallelGroup:'release-prep', row:0,
+      depends_on:['rebase-check'], duration:2400,
+      steps:[
+        {label:'task: gradle build',type:'task'},
+        {label:'task: full test suite',type:'task'},
+      ]},
+    { name:'changelog', zone:'release', parallelGroup:'release-prep', row:1,
+      depends_on:['rebase-check'], duration:1000,
+      steps:[
+        {label:'task: generate changelog',type:'task'},
+      ]},
+    { name:'set-semver', zone:'release',
+      depends_on:['release-build','changelog'], duration:600,
+      steps:[
+        {label:'task: determine bump',type:'task'},
+        {label:'task: set version',type:'task'},
+      ]},
+    { name:'publish-release', zone:'release',
+      depends_on:['set-semver'], duration:1400,
+      steps:[
+        {label:'task: gradle publish',type:'task'},
+        {label:'put: release-jar',type:'resource',resource_type:'s3'},
+      ]},
+    { name:'notify-teams', zone:'release', fanOutGroup:'post-release', row:0,
+      depends_on:['publish-release'], duration:600,
+      steps:[
+        {label:'put: slack',type:'resource',resource_type:'notify'},
+      ]},
+    { name:'tag-release', zone:'release', fanOutGroup:'post-release', row:1,
+      depends_on:['publish-release'], duration:800,
+      steps:[
+        {label:'task: git tag',type:'task'},
+        {label:'task: push tag',type:'task'},
+      ]},
+  ]
+}
+SCENARIOS['jl-happy'] = JL_BASE
+SCENARIOS['jl-build-fail'] = { ...JL_BASE, name:'jl-build-fails',
+  jobs: JL_BASE.jobs.map(j => j.name==='compile-and-test' ? {...j, failAtStep:1} : j) }
+SCENARIOS['jl-security-block'] = { ...JL_BASE, name:'jl-security-blocked',
+  jobs: JL_BASE.jobs.map(j => j.name==='security-scan' ? {...j, failAtStep:1} : j) }
+SCENARIOS['jl-review-reject'] = { ...JL_BASE, name:'jl-review-rejected',
+  jobs: JL_BASE.jobs.map(j => j.name==='review-gate' ? {...j, failAtStep:0} : j) }
+
 // ══════════════════════════════════════════════════════════════════
 // TIER 2 — COMPONENT (plain JS DOM builder, no framework needed for POC)
 // Renders pipeline to DOM with data-* attributes
@@ -426,7 +570,12 @@ const PipelineComponent = {
 
   _buildHTML(data) {
     const jobs = data.jobs || []
+    const zones = data.zones || []
+    const hasZones = zones.length > 0
+    const GATE_ICONS = { approval:'\u23F8', scheduled:'\u23F1', conditional:'\u26A1', manual:'\uD83D\uDD12' }
     const JW=134, STEP_H=11, JH_BASE=20, JH_MIN=44, CGAP=64, RGAP=18, RC=6, PX=36, PY=28
+    const ZONE_GAP = hasZones ? 36 : 0
+    const ZONE_H = hasZones ? 26 : 0
     const jh = j => Math.max(JH_MIN, JH_BASE + (j.steps?.length||0)*STEP_H + 4)
 
     // Group into columns
@@ -439,19 +588,36 @@ const PipelineComponent = {
       }
       cols[seen[g]].push({job:j,ji})
     })
+
+    // Zone tracking — detect zone boundaries between columns
+    const colZone = cols.map(col => col[0].job.zone || '')
+    const zoneBreaks = []
+    if (hasZones) {
+      for (let i = 1; i < colZone.length; i++) {
+        if (colZone[i] !== colZone[i-1]) zoneBreaks.push(i)
+      }
+    }
+    const zoneGapBefore = ci => {
+      let gaps = 0
+      for (const bi of zoneBreaks) { if (ci >= bi) gaps++ }
+      return gaps * ZONE_GAP
+    }
+
     const maxJH = Math.max(...jobs.map(j=>jh(j)), JH_MIN)
     const maxRows = Math.max(...cols.map(c=>c.length),1)
     const innerH = maxRows*maxJH + (maxRows-1)*RGAP
-    const H = innerH + PY*2
-    const W = PX + RC*2 + CGAP + cols.length*(JW+CGAP) + RC*2 + PX
-    const colX = ci => PX + RC*2 + CGAP + ci*(JW+CGAP)
-    const srcX = PX+RC, srcY = H/2
+    const totalZoneGaps = zoneBreaks.length * ZONE_GAP
+    const H = innerH + PY*2 + ZONE_H
+    const W = PX + RC*2 + CGAP + cols.length*(JW+CGAP) + RC*2 + PX + totalZoneGaps
+    const colX = ci => PX + RC*2 + CGAP + ci*(JW+CGAP) + zoneGapBefore(ci)
+    const srcX = PX+RC
+    const srcY = ZONE_H + (innerH + PY*2)/2
 
-    // Job Y positions
+    // Job Y positions (centered in content area below zone header)
     const jobY = {}
     cols.forEach((col,ci)=>{
       const tH = col.length*maxJH + (col.length-1)*RGAP
-      const sY = H/2 - tH/2
+      const sY = srcY - tH/2
       col.forEach(({ji},ri) => { jobY[ji] = sY + ri*(maxJH+RGAP) })
     })
 
@@ -523,6 +689,27 @@ const PipelineComponent = {
       }
     })
 
+    // Zone headers — colored header bars above each zone's columns
+    let zoneSVG = ''
+    if (hasZones) {
+      const zoneRanges = {}
+      colZone.forEach((z, ci) => {
+        if (!z) return
+        if (!zoneRanges[z]) zoneRanges[z] = { first: ci, last: ci }
+        else zoneRanges[z].last = ci
+      })
+      zones.forEach(zone => {
+        const range = zoneRanges[zone.id]
+        if (!range) return
+        const x1 = colX(range.first) - 10
+        const x2 = colX(range.last) + JW + 10
+        const zw = x2 - x1
+        zoneSVG += `<rect x="${x1}" y="3" width="${zw}" height="20" rx="4" fill="${zone.color}" opacity="0.06"/>`
+        zoneSVG += `<line x1="${x1}" y1="23" x2="${x2}" y2="23" stroke="${zone.color}" stroke-width="1.5" opacity="0.4"/>`
+        zoneSVG += `<text x="${x1+8}" y="16" font-size="8" font-family="JetBrains Mono,monospace" fill="${zone.color}" font-weight="600" letter-spacing="0.5" opacity="0.8">${zone.label.toUpperCase()}</text>`
+      })
+    }
+
     // foreignObjects for job boxes
     let foSVG = ''
     jobs.forEach((job,ji) => {
@@ -539,8 +726,14 @@ const PipelineComponent = {
       if (job.fanOutGroup && job.row===0) {
         foSVG += `<text x="${x+JW/2}" y="${y-8}" text-anchor="middle" font-size="7" font-family="JetBrains Mono,monospace" fill="#a78bfa" letter-spacing="1">FAN-OUT</text>`
       }
+      // Gate label — gateActor persona or gate vocabulary icon
       if (job.gate && !job.parallelGroup) {
-        foSVG += `<text x="${x+JW/2}" y="${y-8}" text-anchor="middle" font-size="7" font-family="JetBrains Mono,monospace" fill="#fbbf24">${job.gate==='approval'?'\u23F8 APPROVAL':'\u23F1 SCHEDULED'}</text>`
+        if (job.gateActor) {
+          foSVG += `<text x="${x+JW/2}" y="${y-8}" text-anchor="middle" font-size="7" font-family="JetBrains Mono,monospace" fill="${job.gateActorColor||'#fbbf24'}" letter-spacing="1">\u{1F464} ${job.gateActor.toUpperCase()}</text>`
+        } else {
+          const icon = GATE_ICONS[job.gate] || '\u23F8'
+          foSVG += `<text x="${x+JW/2}" y="${y-8}" text-anchor="middle" font-size="7" font-family="JetBrains Mono,monospace" fill="#fbbf24" letter-spacing="1">${icon} ${job.gate.toUpperCase()}</text>`
+        }
       }
     })
 
@@ -562,7 +755,7 @@ const PipelineComponent = {
       </div>
       <div class="pv-svg-scroll">
         <svg width="${W}" height="${H}">
-          ${pathsSVG}${foSVG}
+          ${zoneSVG}${pathsSVG}${foSVG}
           <style>@keyframes pv-spin{to{transform:rotate(360deg)}}</style>
         </svg>
       </div>
@@ -946,7 +1139,7 @@ setInterval(()=>{
 
 // Scenarios — deselect across both tab groups on click
 function activateScenarioTab(tab){
-  document.querySelectorAll('#sc-tabs .sc-tab, #sc-tabs-dj .sc-tab').forEach(t=>t.classList.remove('on'))
+  document.querySelectorAll('#sc-tabs .sc-tab, #sc-tabs-dj .sc-tab, #sc-tabs-jl .sc-tab').forEach(t=>t.classList.remove('on'))
   tab.classList.add('on')
   loadScenario(tab.dataset.s)
 }
@@ -954,6 +1147,9 @@ document.querySelectorAll('#sc-tabs .sc-tab').forEach(tab=>{
   tab.addEventListener('click',()=>activateScenarioTab(tab))
 })
 document.querySelectorAll('#sc-tabs-dj .sc-tab').forEach(tab=>{
+  tab.addEventListener('click',()=>activateScenarioTab(tab))
+})
+document.querySelectorAll('#sc-tabs-jl .sc-tab').forEach(tab=>{
   tab.addEventListener('click',()=>activateScenarioTab(tab))
 })
 

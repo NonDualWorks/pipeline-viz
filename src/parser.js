@@ -234,17 +234,28 @@ export function parsePipeline(yamlString) {
     ...(job.gate && { gate: job.gate }),
     ...(job.gate_delay && { gateDelay: job.gate_delay }),
     ...(job.gate_label && { gateLabel: job.gate_label }),
+    ...(job.gate_actor && { gateActor: job.gate_actor }),
+    ...(job.gate_actor_color && { gateActorColor: job.gate_actor_color }),
     ...(job.fan_out_group && { fanOutGroup: job.fan_out_group }),
+    ...(job.zone && { zone: job.zone }),
   }))
 
   // Sort and group
   const sorted  = topoSort(rawJobs)
   const grouped = assignParallelGroups(sorted)
 
+  // Parse zones (if defined)
+  const zones = (pipeline.zones || []).map(z => ({
+    id:    z.id,
+    label: z.label || z.id,
+    color: z.color || '#71717a',
+  }))
+
   return {
     name:      pipeline.name || null,
     resources: resourceTypes,
     jobs:      grouped,
+    ...(zones.length && { zones }),
   }
 }
 

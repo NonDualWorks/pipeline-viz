@@ -16,6 +16,8 @@ your scenario data and the rendering + animation layers handle the rest.
 | **Fan-out** | `fanOutGroup`, `row` | Stacked jobs, NO merge circle, independent completion |
 | **Failure** | `failAtStep: N` | Job turns red at step N, downstream blocked |
 | **Rollback** | `triggeredByFailure: "job"` | Activates only when named job fails, amber result |
+| **Zones** | `zones` (top-level), `zone` (per job) | Colored header bars, visual phase grouping |
+| **gateActor** | `gateActor`, `gateActorColor` | Persona label on gates (e.g., 👤 REVIEWERS) |
 
 ---
 
@@ -28,6 +30,10 @@ const myPipeline = {
   name: 'my-pipeline',    // displayed in header
   team: 'my-team',        // displayed in header
   color: '#10b981',       // team accent color (header dot)
+  zones: [                // optional — visual phase grouping
+    { id: 'pr', label: 'PR — Feature Branch', color: '#38bdf8' },
+    { id: 'release', label: 'Release — Main Branch', color: '#10b981' },
+  ],
   jobs: [ /* Job objects */ ]
 }
 ```
@@ -50,8 +56,13 @@ const myPipeline = {
   row: 0,                           // vertical position within group
 
   // ── Gate / Approval (optional) ──
-  gate: 'approval',                 // 'approval' or 'scheduled'
+  gate: 'approval',                 // 'approval', 'scheduled', 'conditional', or 'manual'
   gateDelay: 2000,                  // ms spent in gate state before proceeding
+  gateActor: 'Reviewers',           // persona label (replaces generic gate label)
+  gateActorColor: '#f472b6',        // persona label color
+
+  // ── Zone (optional) ──
+  zone: 'pr',                       // zone id — groups jobs under a zone header
 
   // ── Failure (optional) ──
   failAtStep: 1,                    // step index where job fails (-1 or absent = no failure)
@@ -531,6 +542,116 @@ jobs:
 
 ---
 
+## Extended features
+
+### Zones — environment/phase visual layer
+
+Zones group pipeline columns into named phases (e.g., PR vs Release). They are purely visual — no animation logic changes.
+
+```javascript
+const myPipeline = {
+  name: 'my-pipeline', team: 'team', color: '#a78bfa',
+  zones: [
+    { id: 'pr', label: 'PR — Feature Branch', color: '#38bdf8' },
+    { id: 'release', label: 'Release — Main Branch', color: '#10b981' },
+  ],
+  jobs: [
+    { name: 'lint', zone: 'pr', ... },       // assigned to PR zone
+    { name: 'build', zone: 'release', ... },  // assigned to Release zone
+  ]
+}
+```
+
+**Result:** Colored header bars above each zone's columns with label text. Extra gap between zones for visual separation.
+
+**Rules:**
+- `zones` is a top-level array: `[{ id, label, color }]`
+- Each job gets `zone: 'zone-id'` to assign it
+- Zone headers render as semi-transparent bars with colored accent lines
+- Columns auto-group by zone — extra gap inserted at zone boundaries
+- Without zones, layout is identical to before (backward compatible)
+
+### gateActor — persona labels on gates
+
+Distinguish different gates by showing WHO approves instead of a generic label.
+
+```javascript
+{ name: 'review-gate', gate: 'approval', gateDelay: 2500,
+  gateActor: 'Reviewers', gateActorColor: '#f472b6',
+  steps: [
+    { label: 'gate: code review', type: 'gate' },
+    { label: 'task: review checklist', type: 'task' },
+  ]},
+{ name: 'merge-approval', gate: 'approval', gateDelay: 2000,
+  gateActor: 'CODEOWNERS', gateActorColor: '#60a5fa',
+  steps: [
+    { label: 'gate: team approval', type: 'gate' },
+  ]},
+```
+
+**Result:** Gate label shows `👤 REVIEWERS` in pink and `👤 CODEOWNERS` in blue instead of generic `⏸ APPROVAL`.
+
+**Rules:**
+- `gateActor` replaces the default gate label text
+- `gateActorColor` sets the label color (falls back to amber `#fbbf24`)
+- Animation mechanic unchanged (same amber pulse)
+- Without `gateActor`, falls back to gate vocabulary icons
+
+### Gate vocabulary — extended gate types
+
+Four gate types with distinct icons:
+
+| `gate` value | Icon | Meaning |
+|-------------|------|---------|
+| `'approval'` | ⏸ | Human approval required |
+| `'scheduled'` | ⏱ | Time-window gate |
+| `'conditional'` | ⚡ | Auto-approve if criteria met |
+| `'manual'` | 🔒 | Explicit manual trigger |
+
+All four use the same animation mechanic (amber pulse, gateDelay). The icon/label is visual only.
+
+---
+
+## Construct: Java Library Publish
+
+The first complete pipeline construct — a 17-job flow across 2 zones covering the full lifecycle of publishing a Java library JAR.
+
+### Flow
+
+```
+PR ZONE (feature branch):
+  pr-triggered → [compile-and-test ‖ code-quality] → publish-snapshot →
+  [report-status ‖ security-scan] → review-gate(👤 REVIEWERS) →
+  consumer-test → merge-approval(👤 CODEOWNERS)
+
+RELEASE ZONE (main branch):
+  merge-triggered → rebase-check → [release-build ‖ changelog] →
+  set-semver → publish-release → [notify-teams + tag-release](FAN-OUT)
+```
+
+### Primitives coverage
+
+| Primitive | Where |
+|-----------|-------|
+| Sequential | Main chain through both zones |
+| Parallel (fan-in) | compile+test ‖ code-quality; report-status ‖ security-scan; release-build ‖ changelog |
+| Gate (approval) | review-gate (Reviewers), merge-approval (CODEOWNERS) |
+| Fan-out | notify-teams + tag-release |
+| Failure | compile fails → blocks; security scan finds CVE → blocks |
+| Zones | PR zone (blue) vs Release zone (green) |
+| gateActor | Reviewers (pink), CODEOWNERS (blue) |
+
+### Scenario variants
+
+| Tab | What happens | Data tweak |
+|-----|-------------|------------|
+| Happy path | All pass, both gates approved, release published | Base data |
+| Build fails | compile-and-test fails at unit tests | `failAtStep: 1` |
+| Security blocked | security-scan finds vulnerability | `failAtStep: 1` |
+| Review rejected | Code review gate rejected | `failAtStep: 0` |
+
+---
+
 ## Tips
 
 - **Keep `duration` values realistic** — longer tasks = longer `duration`
@@ -539,3 +660,5 @@ jobs:
 - **Test your flow** with the happy path first, then add failure variants
 - **Use `row: 0, 1, 2...`** for consistent vertical ordering in groups
 - **Resource types** only matter for circle colors — pick what looks right
+- **Zones** are optional — pipelines without zones render identically to before
+- **gateActor** is optional — gates without it use the gate vocabulary icon

@@ -516,9 +516,14 @@ class PipelineViz extends LitElement {
     // Tier 3 (GSAP) drives all the actual motion on top of it
     // The SVG here provides stable elements with data-* attributes
     const jobs = this.data?.jobs || []
+    const zones = this.data?.zones || []
+    const hasZones = zones.length > 0
+    const GATE_ICONS = { approval: '\u23F8', scheduled: '\u23F1', conditional: '\u26A1', manual: '\uD83D\uDD12' }
 
     const JW = 134, JH_BASE = 20, STEP_H = 11, JH_MIN = 44
     const CGAP = 64, RGAP = 18, RC = 6, PX = 36, PY = 28
+    const ZONE_GAP = hasZones ? 36 : 0
+    const ZONE_H = hasZones ? 26 : 0
 
     function jobHeight(job) {
       return Math.max(JH_MIN, JH_BASE + (job.steps?.length || 0) * STEP_H + 4)
@@ -538,22 +543,49 @@ class PipelineViz extends LitElement {
     })
     const colTypes = Object.values(colTypeMap)
     const cols = Object.values(colMap)
+
+    // Zone tracking — detect zone boundaries between columns
+    const colZone = cols.map(col => col[0].job.zone || '')
+    const zoneBreaks = []
+    if (hasZones) {
+      for (let i = 1; i < colZone.length; i++) {
+        if (colZone[i] !== colZone[i - 1]) zoneBreaks.push(i)
+      }
+    }
+    const zoneGapBefore = ci => {
+      let gaps = 0
+      for (const bi of zoneBreaks) { if (ci >= bi) gaps++ }
+      return gaps * ZONE_GAP
+    }
+
     const maxRows = Math.max(...cols.map(c => c.length), 1)
     const maxJH = Math.max(...jobs.map(j => jobHeight(j)), JH_MIN)
     const innerH = maxRows * maxJH + (maxRows - 1) * RGAP
-    const H = innerH + PY * 2
-    const W = PX + RC * 2 + CGAP + cols.length * (JW + CGAP) + RC * 2 + PX
+    const totalZoneGaps = zoneBreaks.length * ZONE_GAP
+    const H = innerH + PY * 2 + ZONE_H
+    const W = PX + RC * 2 + CGAP + cols.length * (JW + CGAP) + RC * 2 + PX + totalZoneGaps
 
-    const colX = ci => PX + RC * 2 + CGAP + ci * (JW + CGAP)
-    const srcX = PX + RC, srcY = H / 2
+    const colX = ci => PX + RC * 2 + CGAP + ci * (JW + CGAP) + zoneGapBefore(ci)
+    const srcX = PX + RC
+    const srcY = ZONE_H + (innerH + PY * 2) / 2
 
-    // Job Y positions
+    // Job Y positions (centered in content area below zone header)
     const jobY = {}
     cols.forEach((col, ci) => {
       const totalH = col.length * maxJH + (col.length - 1) * RGAP
-      const startY = H / 2 - totalH / 2
+      const startY = srcY - totalH / 2
       col.forEach(({ ji }, ri) => { jobY[ji] = startY + ri * (maxJH + RGAP) })
     })
+
+    // Zone header data
+    const zoneRanges = {}
+    if (hasZones) {
+      colZone.forEach((z, ci) => {
+        if (!z) return
+        if (!zoneRanges[z]) zoneRanges[z] = { first: ci, last: ci }
+        else zoneRanges[z].last = ci
+      })
+    }
 
     const foreignJobBoxes = jobs.map((job, ji) => {
       const x = colX(cols.findIndex(c => c.some(e => e.ji === ji)))
@@ -565,6 +597,25 @@ class PipelineViz extends LitElement {
     return html`
       <div class="svg-scroll">
         <svg width="${W}" height="${H}">
+
+          <!-- Zone headers -->
+          ${hasZones ? zones.map(zone => {
+            const range = zoneRanges[zone.id]
+            if (!range) return nothing
+            const x1 = colX(range.first) - 10
+            const x2 = colX(range.last) + JW + 10
+            const zw = x2 - x1
+            return html`
+              <rect x="${x1}" y="3" width="${zw}" height="20" rx="4"
+                fill="${zone.color}" opacity="0.06" />
+              <line x1="${x1}" y1="23" x2="${x2}" y2="23"
+                stroke="${zone.color}" stroke-width="1.5" opacity="0.4" />
+              <text x="${x1 + 8}" y="16" font-size="8"
+                font-family="JetBrains Mono, monospace"
+                fill="${zone.color}" font-weight="600"
+                letter-spacing="0.5" opacity="0.8">${zone.label.toUpperCase()}</text>
+            `
+          }) : nothing}
 
           <!-- Source resource circle -->
           <circle data-rc="source" cx="${srcX}" cy="${srcY}" r="${RC}"
@@ -664,12 +715,20 @@ class PipelineViz extends LitElement {
                 font-family="JetBrains Mono, monospace"
                 fill="#a78bfa" letter-spacing="1">FAN-OUT</text>
             ` : nothing}
-            ${job.gate && !job.parallelGroup ? html`
-              <text x="${x + JW / 2}" y="${y - 8}"
-                text-anchor="middle" font-size="7"
-                font-family="JetBrains Mono, monospace"
-                fill="#fbbf24">${job.gate === 'approval' ? '⏸ APPROVAL' : '⏱ SCHEDULED'}</text>
-            ` : nothing}
+            ${job.gate && !job.parallelGroup ? (
+              job.gateActor ? html`
+                <text x="${x + JW / 2}" y="${y - 8}"
+                  text-anchor="middle" font-size="7"
+                  font-family="JetBrains Mono, monospace"
+                  fill="${job.gateActorColor || '#fbbf24'}"
+                  letter-spacing="1">\u{1F464} ${job.gateActor.toUpperCase()}</text>
+              ` : html`
+                <text x="${x + JW / 2}" y="${y - 8}"
+                  text-anchor="middle" font-size="7"
+                  font-family="JetBrains Mono, monospace"
+                  fill="#fbbf24">${GATE_ICONS[job.gate] || '\u23F8'} ${job.gate.toUpperCase()}</text>
+              `
+            ) : nothing}
           `)}
         </svg>
       </div>
