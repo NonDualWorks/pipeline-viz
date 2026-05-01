@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>Pipeline Viz — Basics (Sequential + Parallel)</title>
+<link rel="stylesheet" href="shared.css"/>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/gsap.min.js"></script>
+</head>
+<body>
+
+<nav class="nav">
+  <div class="nav-left">
+    <div class="nav-dot"></div>
+    <span class="nav-title">Pipeline Viz</span>
+    <span class="nav-badge">Basics</span>
+  </div>
+  <div class="nav-links">
+    <a class="nav-link active" href="basics.html">Basics</a>
+    <a class="nav-link" href="gates.html">Gates</a>
+    <a class="nav-link" href="failures.html">Failures</a>
+    <a class="nav-link" href="java-lib.html">Java Lib</a>
+    <a class="nav-link" href="index.html">All</a>
+  </div>
+</nav>
+
+<div class="main">
+
+  <!-- Controls -->
+  <section>
+    <div class="sec-title">Animation controls</div>
+    <div class="ctrl-panel">
+      <div class="ctrl-group">
+        <span class="ctrl-lbl">speed</span>
+        <input type="range" class="spd-slider" id="spd" min="0.2" max="3" step="0.1" value="1"/>
+        <span class="spd-val" id="spd-val">1×</span>
+      </div>
+      <div class="ctrl-group">
+        <div class="pill-grp" id="spd-presets">
+          <button class="pill" data-v="0.4">fast</button>
+          <button class="pill on" data-v="1">normal</button>
+          <button class="pill" data-v="2.5">slow</button>
+        </div>
+      </div>
+      <div class="ctrl-group">
+        <span class="ctrl-lbl">mode</span>
+        <div class="pill-grp" id="mode-grp">
+          <button class="pill on" data-m="auto">auto</button>
+          <button class="pill" data-m="manual">step</button>
+        </div>
+      </div>
+      <button class="btn" id="replay-btn">↺ replay</button>
+      <button class="btn btn-adv" id="adv-btn">▶ next job</button>
+    </div>
+  </section>
+
+  <!-- Scenarios -->
+  <section>
+    <div class="sec-title">Scenarios — Sequential + Parallel (fan-in)</div>
+    <div class="sc-tabs" id="sc-tabs">
+      <button class="sc-tab on" data-s="happy">
+        <span class="sc-name">Happy path</span>
+        <span class="sc-sub">both pass → scan runs</span>
+      </button>
+      <button class="sc-tab" data-s="one-fail">
+        <span class="sc-name">One fails</span>
+        <span class="sc-sub">unit-tests ✗ → blocked</span>
+      </button>
+      <button class="sc-tab" data-s="both-fail">
+        <span class="sc-name">Both fail</span>
+        <span class="sc-sub">all tests ✗ → blocked</span>
+      </button>
+    </div>
+  </section>
+
+  <!-- Status -->
+  <div class="status" id="status">
+    <div class="s-dot" id="s-dot"></div>
+    <span class="s-txt" id="s-txt">initialising…</span>
+  </div>
+
+  <!-- Pipeline -->
+  <section>
+    <div class="sec-title">Live pipeline animation</div>
+    <div class="pl-wrap" id="pl-wrap">
+      <div class="pv-root" id="pv-root"></div>
+    </div>
+  </section>
+
+  <!-- Event log -->
+  <section>
+    <div class="sec-title">Event log</div>
+    <div class="evlog" id="evlog">
+      <div style="color:var(--subtle)">Waiting for events…</div>
+    </div>
+  </section>
+
+</div>
+
+<script src="shared.js"></script>
+<script>
+// ── Scenario data ──
+const BASE = {
+  name:'java-gradle-parallel', team:'app-dev', color:'#10b981',
+  jobs:[
+    { name:'unit-tests', parallelGroup:'tests', row:0, duration:1600,
+      steps:[
+        {label:'get: app-source',    type:'resource',resource_type:'git'},
+        {label:'task: gradle test',  type:'task'},
+        {label:'task: junit report', type:'task'},
+      ]},
+    { name:'integ-tests', parallelGroup:'tests', row:1, duration:2600,
+      steps:[
+        {label:'get: app-source',     type:'resource',resource_type:'git'},
+        {label:'task: start testenv', type:'task'},
+        {label:'task: integ suite',   type:'task'},
+        {label:'task: teardown',      type:'task'},
+      ]},
+    { name:'scan', depends_on:['unit-tests','integ-tests'], duration:2200,
+      steps:[
+        {label:'get: app-source',       type:'resource',resource_type:'git'},
+        {label:'task: trivy scan',      type:'task'},
+        {label:'task: compliance gate', type:'task'},
+      ]},
+    { name:'publish', depends_on:['scan'], duration:1600,
+      steps:[
+        {label:'task: build image',type:'task'},
+        {label:'put: app-image',   type:'resource',resource_type:'image'},
+      ]},
+  ]
+}
+
+const SCENARIOS = {
+  happy: BASE,
+  'one-fail': { ...BASE, name:'java-gradle-unit-fail',
+    jobs:[ {...BASE.jobs[0],failAtStep:1}, ...BASE.jobs.slice(1) ]},
+  'both-fail': { ...BASE, name:'java-gradle-both-fail',
+    jobs:[ {...BASE.jobs[0],failAtStep:1}, {...BASE.jobs[1],failAtStep:2}, ...BASE.jobs.slice(2) ]},
+}
+
+PV.boot(SCENARIOS, 'happy')
+</script>
+</body>
+</html>

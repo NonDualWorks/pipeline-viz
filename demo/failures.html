@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>Pipeline Viz — Failures (Failure + Rollback + Full Feedback)</title>
+<link rel="stylesheet" href="shared.css"/>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/gsap.min.js"></script>
+</head>
+<body>
+
+<nav class="nav">
+  <div class="nav-left">
+    <div class="nav-dot"></div>
+    <span class="nav-title">Pipeline Viz</span>
+    <span class="nav-badge">Failures</span>
+  </div>
+  <div class="nav-links">
+    <a class="nav-link" href="basics.html">Basics</a>
+    <a class="nav-link" href="gates.html">Gates</a>
+    <a class="nav-link active" href="failures.html">Failures</a>
+    <a class="nav-link" href="java-lib.html">Java Lib</a>
+    <a class="nav-link" href="index.html">All</a>
+  </div>
+</nav>
+
+<div class="main">
+
+  <!-- Controls -->
+  <section>
+    <div class="sec-title">Animation controls</div>
+    <div class="ctrl-panel">
+      <div class="ctrl-group">
+        <span class="ctrl-lbl">speed</span>
+        <input type="range" class="spd-slider" id="spd" min="0.2" max="3" step="0.1" value="1"/>
+        <span class="spd-val" id="spd-val">1×</span>
+      </div>
+      <div class="ctrl-group">
+        <div class="pill-grp" id="spd-presets">
+          <button class="pill" data-v="0.4">fast</button>
+          <button class="pill on" data-v="1">normal</button>
+          <button class="pill" data-v="2.5">slow</button>
+        </div>
+      </div>
+      <div class="ctrl-group">
+        <span class="ctrl-lbl">mode</span>
+        <div class="pill-grp" id="mode-grp">
+          <button class="pill on" data-m="auto">auto</button>
+          <button class="pill" data-m="manual">step</button>
+        </div>
+      </div>
+      <button class="btn" id="replay-btn">↺ replay</button>
+      <button class="btn btn-adv" id="adv-btn">▶ next job</button>
+    </div>
+  </section>
+
+  <!-- Scenarios -->
+  <section>
+    <div class="sec-title">Scenarios — Failure modes + Full feedback</div>
+    <div class="sc-tabs" id="sc-tabs">
+      <button class="sc-tab on" data-s="one-fail">
+        <span class="sc-name">Parallel fail</span>
+        <span class="sc-sub">one sibling ✗ · other keeps running</span>
+      </button>
+      <button class="sc-tab" data-s="both-fail">
+        <span class="sc-name">Both fail</span>
+        <span class="sc-sub">all tests ✗ → blocked</span>
+      </button>
+      <button class="sc-tab" data-s="dj-test-fail">
+        <span class="sc-name">Gate pipeline fail</span>
+        <span class="sc-sub">unit-tests ✗ in gated pipeline</span>
+      </button>
+      <button class="sc-tab" data-s="jl-build-fail">
+        <span class="sc-name">Zoned fail</span>
+        <span class="sc-sub">compile ✗ in PR zone</span>
+      </button>
+    </div>
+  </section>
+
+  <!-- Status -->
+  <div class="status" id="status">
+    <div class="s-dot" id="s-dot"></div>
+    <span class="s-txt" id="s-txt">initialising…</span>
+  </div>
+
+  <!-- Pipeline -->
+  <section>
+    <div class="sec-title">Live pipeline animation</div>
+    <div class="pl-wrap" id="pl-wrap">
+      <div class="pv-root" id="pv-root"></div>
+    </div>
+  </section>
+
+  <!-- Event log -->
+  <section>
+    <div class="sec-title">Event log</div>
+    <div class="evlog" id="evlog">
+      <div style="color:var(--subtle)">Waiting for events…</div>
+    </div>
+  </section>
+
+</div>
+
+<script src="shared.js"></script>
+<script>
+// ── Basic parallel pipeline (for one-fail, both-fail) ──
+const BASIC = {
+  name:'java-gradle-parallel', team:'app-dev', color:'#10b981',
+  jobs:[
+    { name:'unit-tests', parallelGroup:'tests', row:0, duration:1600,
+      steps:[
+        {label:'get: app-source',    type:'resource',resource_type:'git'},
+        {label:'task: gradle test',  type:'task'},
+        {label:'task: junit report', type:'task'},
+      ]},
+    { name:'integ-tests', parallelGroup:'tests', row:1, duration:2600,
+      steps:[
+        {label:'get: app-source',     type:'resource',resource_type:'git'},
+        {label:'task: start testenv', type:'task'},
+        {label:'task: integ suite',   type:'task'},
+        {label:'task: teardown',      type:'task'},
+      ]},
+    { name:'scan', depends_on:['unit-tests','integ-tests'], duration:2200,
+      steps:[
+        {label:'get: app-source',       type:'resource',resource_type:'git'},
+        {label:'task: trivy scan',      type:'task'},
+        {label:'task: compliance gate', type:'task'},
+      ]},
+    { name:'publish', depends_on:['scan'], duration:1600,
+      steps:[
+        {label:'task: build image',type:'task'},
+        {label:'put: app-image',   type:'resource',resource_type:'image'},
+      ]},
+  ]
+}
+
+// ── Developer journey base (for dj-test-fail) ──
+const DJ_BASE = {
+  name:'developer-journey', team:'platform', color:'#a78bfa',
+  jobs:[
+    { name:'code-push', duration:800,
+      steps:[
+        {label:'get: source',type:'resource',resource_type:'git'},
+        {label:'task: lint',type:'task'},
+      ]},
+    { name:'unit-tests', parallelGroup:'tests', row:0, depends_on:['code-push'], duration:1600,
+      steps:[
+        {label:'get: source',type:'resource',resource_type:'git'},
+        {label:'task: unit suite',type:'task'},
+        {label:'task: coverage',type:'task'},
+      ]},
+    { name:'integ-tests', parallelGroup:'tests', row:1, depends_on:['code-push'], duration:2200,
+      steps:[
+        {label:'get: source',type:'resource',resource_type:'git'},
+        {label:'task: start env',type:'task'},
+        {label:'task: integ suite',type:'task'},
+        {label:'task: teardown',type:'task'},
+      ]},
+    { name:'code-review', depends_on:['unit-tests','integ-tests'], duration:1200, gate:'approval', gateDelay:2000,
+      steps:[
+        {label:'gate: approval',type:'gate'},
+        {label:'task: merge check',type:'task'},
+      ]},
+    { name:'build-image', depends_on:['code-review'], duration:1400,
+      steps:[
+        {label:'task: docker build',type:'task'},
+        {label:'put: app-image',type:'resource',resource_type:'image'},
+      ]},
+    { name:'deploy-dev', depends_on:['build-image'], duration:1200,
+      steps:[
+        {label:'get: app-image',type:'resource',resource_type:'image'},
+        {label:'task: helm upgrade',type:'task'},
+        {label:'task: health check',type:'task'},
+      ]},
+    { name:'smoke-tests', parallelGroup:'qa', row:0, depends_on:['deploy-dev'], duration:1800,
+      steps:[
+        {label:'task: smoke suite',type:'task'},
+        {label:'task: api checks',type:'task'},
+      ]},
+    { name:'qa-signoff', parallelGroup:'qa', row:1, depends_on:['deploy-dev'], duration:2200, gate:'approval', gateDelay:1800,
+      steps:[
+        {label:'gate: approval',type:'gate'},
+        {label:'task: qa checklist',type:'task'},
+      ]},
+    { name:'deploy-staging', depends_on:['smoke-tests','qa-signoff'], duration:1400,
+      steps:[
+        {label:'get: app-image',type:'resource',resource_type:'image'},
+        {label:'task: helm upgrade',type:'task'},
+        {label:'task: verify',type:'task'},
+      ]},
+    { name:'deploy-prod', depends_on:['deploy-staging'], duration:1600,
+      steps:[
+        {label:'get: app-image',type:'resource',resource_type:'image'},
+        {label:'task: helm upgrade',type:'task'},
+        {label:'task: health check',type:'task'},
+        {label:'put: notify',type:'resource',resource_type:'notify'},
+      ]},
+    { name:'notify-slack', fanOutGroup:'notify', row:0, depends_on:['deploy-prod'], duration:800,
+      steps:[
+        {label:'put: slack',type:'resource',resource_type:'notify'},
+      ]},
+    { name:'update-dashboard', fanOutGroup:'notify', row:1, depends_on:['deploy-prod'], duration:1000,
+      steps:[
+        {label:'task: update metrics',type:'task'},
+        {label:'put: dashboard',type:'resource',resource_type:'notify'},
+      ]},
+  ]
+}
+
+// ── Java Library base (for jl-build-fail) ──
+const JL_BASE = {
+  name:'java-lib-publish', team:'platform', color:'#a78bfa',
+  zones:[
+    { id:'pr', label:'PR \u2014 Feature Branch', color:'#38bdf8' },
+    { id:'release', label:'Release \u2014 Main Branch', color:'#10b981' },
+  ],
+  jobs:[
+    { name:'pr-triggered', zone:'pr', timing:'flash',
+      steps:[{label:'get: source',type:'resource',resource_type:'git'}]},
+    { name:'compile-and-test', zone:'pr', parallelGroup:'checks', row:0,
+      depends_on:['pr-triggered'], timing:'slow',
+      steps:[
+        {label:'task: gradle build',type:'task'},
+        {label:'task: unit tests',type:'task'},
+        {label:'task: test report',type:'task'},
+      ]},
+    { name:'code-quality', zone:'pr', parallelGroup:'checks', row:1,
+      depends_on:['pr-triggered'], timing:'steady',
+      steps:[
+        {label:'task: checkstyle',type:'task'},
+        {label:'task: spotbugs',type:'task'},
+      ]},
+    { name:'publish-snapshot', zone:'pr',
+      depends_on:['compile-and-test','code-quality'], timing:'steady',
+      steps:[
+        {label:'task: gradle publish',type:'task'},
+        {label:'put: snapshot-jar',type:'resource',resource_type:'s3'},
+      ]},
+    { name:'report-status', zone:'pr', parallelGroup:'verify', row:0,
+      depends_on:['publish-snapshot'], timing:'flash',
+      steps:[{label:'task: POST status \u2192 SCM',type:'task'}]},
+    { name:'security-scan', zone:'pr', parallelGroup:'verify', row:1,
+      depends_on:['publish-snapshot'], timing:'crawl',
+      steps:[
+        {label:'task: trigger scan API',type:'task'},
+        {label:'task: poll results',type:'task'},
+      ]},
+    { name:'review-gate', zone:'pr',
+      depends_on:['report-status','security-scan'],
+      timing:'quick', gate:'approval', gateTiming:'slow',
+      gateActor:'Reviewers', gateActorColor:'#f472b6',
+      steps:[
+        {label:'gate: code review',type:'gate'},
+        {label:'task: review checklist',type:'task'},
+      ]},
+    { name:'consumer-test', zone:'pr',
+      depends_on:['review-gate'], timing:'slow',
+      steps:[
+        {label:'get: snapshot-jar',type:'resource',resource_type:'s3'},
+        {label:'task: include in downstream',type:'task'},
+        {label:'task: gradle test',type:'task'},
+      ]},
+    { name:'merge-approval', zone:'pr',
+      depends_on:['consumer-test'],
+      timing:'quick', gate:'approval', gateTiming:'steady',
+      gateActor:'CODEOWNERS', gateActorColor:'#60a5fa',
+      steps:[{label:'gate: team approval',type:'gate'}]},
+    { name:'merge-triggered', zone:'release',
+      depends_on:['merge-approval'], timing:'flash',
+      steps:[{label:'get: source (main)',type:'resource',resource_type:'git'}]},
+    { name:'rebase-check', zone:'release',
+      depends_on:['merge-triggered'], timing:'quick',
+      steps:[
+        {label:'task: check rebase needed',type:'task'},
+        {label:'task: fast-forward merge',type:'task'},
+      ]},
+    { name:'release-build', zone:'release', parallelGroup:'release-prep', row:0,
+      depends_on:['rebase-check'], timing:'slow',
+      steps:[
+        {label:'task: gradle build',type:'task'},
+        {label:'task: full test suite',type:'task'},
+      ]},
+    { name:'changelog', zone:'release', parallelGroup:'release-prep', row:1,
+      depends_on:['rebase-check'], timing:'quick',
+      steps:[{label:'task: generate changelog',type:'task'}]},
+    { name:'set-semver', zone:'release',
+      depends_on:['release-build','changelog'], timing:'flash',
+      steps:[
+        {label:'task: determine bump',type:'task'},
+        {label:'task: set version',type:'task'},
+      ]},
+    { name:'publish-release', zone:'release',
+      depends_on:['set-semver'], timing:'steady',
+      steps:[
+        {label:'task: gradle publish',type:'task'},
+        {label:'put: release-jar',type:'resource',resource_type:'s3'},
+      ]},
+    { name:'notify-teams', zone:'release', fanOutGroup:'post-release', row:0,
+      depends_on:['publish-release'], timing:'flash',
+      steps:[{label:'put: slack',type:'resource',resource_type:'notify'}]},
+    { name:'tag-release', zone:'release', fanOutGroup:'post-release', row:1,
+      depends_on:['publish-release'], timing:'quick',
+      steps:[
+        {label:'task: git tag',type:'task'},
+        {label:'task: push tag',type:'task'},
+      ]},
+  ]
+}
+
+const SCENARIOS = {
+  'one-fail': { ...BASIC, name:'java-gradle-unit-fail',
+    jobs:[ {...BASIC.jobs[0],failAtStep:1}, ...BASIC.jobs.slice(1) ]},
+  'both-fail': { ...BASIC, name:'java-gradle-both-fail',
+    jobs:[ {...BASIC.jobs[0],failAtStep:1}, {...BASIC.jobs[1],failAtStep:2}, ...BASIC.jobs.slice(2) ]},
+  'dj-test-fail': { ...DJ_BASE, name:'dj-test-fails',
+    jobs: DJ_BASE.jobs.map(j => j.name==='unit-tests' ? {...j, failAtStep:1} : j) },
+  'jl-build-fail': { ...JL_BASE, name:'jl-build-fails',
+    jobs: JL_BASE.jobs.map(j => j.name==='compile-and-test' ? {...j, failAtStep:1} : j) },
+}
+
+PV.boot(SCENARIOS, 'one-fail')
+</script>
+</body>
+</html>

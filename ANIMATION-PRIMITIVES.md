@@ -437,15 +437,21 @@ SCENARIOS['test-fail'] = {
 
 ## Step-by-step: Adding a new pipeline flow
 
-### In the demo (`demo/index.html`)
+### In the demo (focused pages in `demo/`)
 
-1. **Define your scenario data** in the `SCENARIOS` object:
+Each demo page is self-contained with its own scenario data. Pick the
+page that best matches your primitives, or create a new one.
+
+1. **Define your scenario data** in a `SCENARIOS` object inside a `<script>` block:
 
 ```javascript
-SCENARIOS['my-flow'] = {
-  name: 'my-flow', team: 'my-team', color: '#10b981',
-  jobs: [ /* your jobs */ ]
+const SCENARIOS = {
+  'my-flow': {
+    name: 'my-flow', team: 'my-team', color: '#10b981',
+    jobs: [ /* your jobs */ ]
+  }
 }
+PV.boot(SCENARIOS, 'my-flow')
 ```
 
 2. **Add a tab** in the HTML:
@@ -457,7 +463,7 @@ SCENARIOS['my-flow'] = {
 </button>
 ```
 
-3. **Open in browser** — no build step needed.
+3. **Open in browser** — no build step needed. Works from `file://`.
 
 ### In slides (`pipeline-viz-slides/golden-paths/index.html`)
 

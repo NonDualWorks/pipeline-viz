@@ -12,7 +12,13 @@ Each tier knows nothing about the others except the interface between them.
 
 ## Quick start
 
-Open `demo/index.html` in a browser. No build step.
+Open any demo page in a browser — no build step:
+
+- `demo/index.html` — Landing page linking to all demos
+- `demo/basics.html` — Sequential + Parallel (fan-in)
+- `demo/gates.html` — Gate + gateActor + Fan-out
+- `demo/failures.html` — Failure modes + Full feedback
+- `demo/java-lib.html` — Full 17-job construct (zones + timing tokens)
 
 ## Animation primitives
 
@@ -44,7 +50,13 @@ src/
   pipeline-viz.js    Tier 2 — Lit custom element
   pipeline-anim.js   Tier 3 — GSAP engine
 demo/
-  index.html         Working POC — open from file://, no build needed
+  index.html         Landing page — links to focused demo pages
+  shared.css         Shared styles across all demo pages
+  shared.js          Shared Tier 2 + Tier 3 engine (PV.boot API)
+  basics.html        Sequential + Parallel primitives
+  gates.html         Gate + gateActor + Fan-out primitives
+  failures.html      Failure modes from all pipeline types
+  java-lib.html      Full construct — zones + timing tokens
 authoring/
   concourse-viz.html YAML → .js export tool
 ```

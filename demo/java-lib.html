@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>Pipeline Viz — Java Library Publish (Zones + Timing Tokens)</title>
+<link rel="stylesheet" href="shared.css"/>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/gsap.min.js"></script>
+</head>
+<body>
+
+<nav class="nav">
+  <div class="nav-left">
+    <div class="nav-dot"></div>
+    <span class="nav-title">Pipeline Viz</span>
+    <span class="nav-badge">Java Lib</span>
+  </div>
+  <div class="nav-links">
+    <a class="nav-link" href="basics.html">Basics</a>
+    <a class="nav-link" href="gates.html">Gates</a>
+    <a class="nav-link" href="failures.html">Failures</a>
+    <a class="nav-link active" href="java-lib.html">Java Lib</a>
+    <a class="nav-link" href="index.html">All</a>
+  </div>
+</nav>
+
+<div class="main">
+
+  <!-- Controls -->
+  <section>
+    <div class="sec-title">Animation controls</div>
+    <div class="ctrl-panel">
+      <div class="ctrl-group">
+        <span class="ctrl-lbl">speed</span>
+        <input type="range" class="spd-slider" id="spd" min="0.2" max="3" step="0.1" value="1"/>
+        <span class="spd-val" id="spd-val">1×</span>
+      </div>
+      <div class="ctrl-group">
+        <div class="pill-grp" id="spd-presets">
+          <button class="pill" data-v="0.4">fast</button>
+          <button class="pill on" data-v="1">normal</button>
+          <button class="pill" data-v="2.5">slow</button>
+        </div>
+      </div>
+      <div class="ctrl-group">
+        <span class="ctrl-lbl">mode</span>
+        <div class="pill-grp" id="mode-grp">
+          <button class="pill on" data-m="auto">auto</button>
+          <button class="pill" data-m="manual">step</button>
+        </div>
+      </div>
+      <button class="btn" id="replay-btn">↺ replay</button>
+      <button class="btn btn-adv" id="adv-btn">▶ next job</button>
+    </div>
+  </section>
+
+  <!-- Scenarios -->
+  <section>
+    <div class="sec-title">Scenarios — Java Library Publish (zones + gateActor + timing tokens)</div>
+    <div class="sc-tabs" id="sc-tabs">
+      <button class="sc-tab on" data-s="jl-happy">
+        <span class="sc-name">Happy path</span>
+        <span class="sc-sub">PR ✓ → release published</span>
+      </button>
+      <button class="sc-tab" data-s="jl-build-fail">
+        <span class="sc-name">Build fails</span>
+        <span class="sc-sub">compile ✗ → blocked</span>
+      </button>
+      <button class="sc-tab" data-s="jl-security-block">
+        <span class="sc-name">Security blocked</span>
+        <span class="sc-sub">scan finds CVE ✗</span>
+      </button>
+      <button class="sc-tab" data-s="jl-review-reject">
+        <span class="sc-name">Review rejected</span>
+        <span class="sc-sub">code review ✗</span>
+      </button>
+    </div>
+  </section>
+
+  <!-- Status -->
+  <div class="status" id="status">
+    <div class="s-dot" id="s-dot"></div>
+    <span class="s-txt" id="s-txt">initialising…</span>
+  </div>
+
+  <!-- Pipeline -->
+  <section>
+    <div class="sec-title">Live pipeline animation</div>
+    <div class="pl-wrap" id="pl-wrap">
+      <div class="pv-root" id="pv-root"></div>
+    </div>
+  </section>
+
+  <!-- Event log -->
+  <section>
+    <div class="sec-title">Event log</div>
+    <div class="evlog" id="evlog">
+      <div style="color:var(--subtle)">Waiting for events…</div>
+    </div>
+  </section>
+
+</div>
+
+<script src="shared.js"></script>
+<script>
+// ── Scenario data ──
+const JL_BASE = {
+  name:'java-lib-publish', team:'platform', color:'#a78bfa',
+  zones:[
+    { id:'pr', label:'PR \u2014 Feature Branch', color:'#38bdf8' },
+    { id:'release', label:'Release \u2014 Main Branch', color:'#10b981' },
+  ],
+  jobs:[
+    // ── PR ZONE ──
+    { name:'pr-triggered', zone:'pr', timing:'flash',
+      steps:[
+        {label:'get: source',type:'resource',resource_type:'git'},
+      ]},
+    { name:'compile-and-test', zone:'pr', parallelGroup:'checks', row:0,
+      depends_on:['pr-triggered'], timing:'slow',
+      steps:[
+        {label:'task: gradle build',type:'task'},
+        {label:'task: unit tests',type:'task'},
+        {label:'task: test report',type:'task'},
+      ]},
+    { name:'code-quality', zone:'pr', parallelGroup:'checks', row:1,
+      depends_on:['pr-triggered'], timing:'steady',
+      steps:[
+        {label:'task: checkstyle',type:'task'},
+        {label:'task: spotbugs',type:'task'},
+      ]},
+    { name:'publish-snapshot', zone:'pr',
+      depends_on:['compile-and-test','code-quality'], timing:'steady',
+      steps:[
+        {label:'task: gradle publish',type:'task'},
+        {label:'put: snapshot-jar',type:'resource',resource_type:'s3'},
+      ]},
+    { name:'report-status', zone:'pr', parallelGroup:'verify', row:0,
+      depends_on:['publish-snapshot'], timing:'flash',
+      steps:[
+        {label:'task: POST status \u2192 SCM',type:'task'},
+      ]},
+    { name:'security-scan', zone:'pr', parallelGroup:'verify', row:1,
+      depends_on:['publish-snapshot'], timing:'crawl',
+      steps:[
+        {label:'task: trigger scan API',type:'task'},
+        {label:'task: poll results',type:'task'},
+      ]},
+    { name:'review-gate', zone:'pr',
+      depends_on:['report-status','security-scan'],
+      timing:'quick', gate:'approval', gateTiming:'slow',
+      gateActor:'Reviewers', gateActorColor:'#f472b6',
+      steps:[
+        {label:'gate: code review',type:'gate'},
+        {label:'task: review checklist',type:'task'},
+      ]},
+    { name:'consumer-test', zone:'pr',
+      depends_on:['review-gate'], timing:'slow',
+      steps:[
+        {label:'get: snapshot-jar',type:'resource',resource_type:'s3'},
+        {label:'task: include in downstream',type:'task'},
+        {label:'task: gradle test',type:'task'},
+      ]},
+    { name:'merge-approval', zone:'pr',
+      depends_on:['consumer-test'],
+      timing:'quick', gate:'approval', gateTiming:'steady',
+      gateActor:'CODEOWNERS', gateActorColor:'#60a5fa',
+      steps:[
+        {label:'gate: team approval',type:'gate'},
+      ]},
+    // ── RELEASE ZONE ──
+    { name:'merge-triggered', zone:'release',
+      depends_on:['merge-approval'], timing:'flash',
+      steps:[
+        {label:'get: source (main)',type:'resource',resource_type:'git'},
+      ]},
+    { name:'rebase-check', zone:'release',
+      depends_on:['merge-triggered'], timing:'quick',
+      steps:[
+        {label:'task: check rebase needed',type:'task'},
+        {label:'task: fast-forward merge',type:'task'},
+      ]},
+    { name:'release-build', zone:'release', parallelGroup:'release-prep', row:0,
+      depends_on:['rebase-check'], timing:'slow',
+      steps:[
+        {label:'task: gradle build',type:'task'},
+        {label:'task: full test suite',type:'task'},
+      ]},
+    { name:'changelog', zone:'release', parallelGroup:'release-prep', row:1,
+      depends_on:['rebase-check'], timing:'quick',
+      steps:[
+        {label:'task: generate changelog',type:'task'},
+      ]},
+    { name:'set-semver', zone:'release',
+      depends_on:['release-build','changelog'], timing:'flash',
+      steps:[
+        {label:'task: determine bump',type:'task'},
+        {label:'task: set version',type:'task'},
+      ]},
+    { name:'publish-release', zone:'release',
+      depends_on:['set-semver'], timing:'steady',
+      steps:[
+        {label:'task: gradle publish',type:'task'},
+        {label:'put: release-jar',type:'resource',resource_type:'s3'},
+      ]},
+    { name:'notify-teams', zone:'release', fanOutGroup:'post-release', row:0,
+      depends_on:['publish-release'], timing:'flash',
+      steps:[
+        {label:'put: slack',type:'resource',resource_type:'notify'},
+      ]},
+    { name:'tag-release', zone:'release', fanOutGroup:'post-release', row:1,
+      depends_on:['publish-release'], timing:'quick',
+      steps:[
+        {label:'task: git tag',type:'task'},
+        {label:'task: push tag',type:'task'},
+      ]},
+  ]
+}
+
+const SCENARIOS = {
+  'jl-happy': JL_BASE,
+  'jl-build-fail': { ...JL_BASE, name:'jl-build-fails',
+    jobs: JL_BASE.jobs.map(j => j.name==='compile-and-test' ? {...j, failAtStep:1} : j) },
+  'jl-security-block': { ...JL_BASE, name:'jl-security-blocked',
+    jobs: JL_BASE.jobs.map(j => j.name==='security-scan' ? {...j, failAtStep:1} : j) },
+  'jl-review-reject': { ...JL_BASE, name:'jl-review-rejected',
+    jobs: JL_BASE.jobs.map(j => j.name==='review-gate' ? {...j, failAtStep:0} : j) },
+}
+
+PV.boot(SCENARIOS, 'jl-happy')
+</script>
+</body>
+</html>
