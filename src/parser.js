@@ -236,6 +236,8 @@ export function parsePipeline(yamlString) {
     ...(job.gate_label && { gateLabel: job.gate_label }),
     ...(job.gate_actor && { gateActor: job.gate_actor }),
     ...(job.gate_actor_color && { gateActorColor: job.gate_actor_color }),
+    ...(job.timing && { timing: job.timing }),
+    ...(job.gate_timing && { gateTiming: job.gate_timing }),
     ...(job.fan_out_group && { fanOutGroup: job.fan_out_group }),
     ...(job.zone && { zone: job.zone }),
   }))

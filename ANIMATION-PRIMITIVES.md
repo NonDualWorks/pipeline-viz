@@ -652,6 +652,57 @@ RELEASE ZONE (main branch):
 
 ---
 
+## Timing Tokens
+
+Semantic duration tokens replace raw millisecond values. Jobs use `timing: 'slow'` instead of `duration: 2200`. The animation engine resolves tokens to milliseconds. Raw `duration` still works as an override (takes precedence over `timing`).
+
+### Token definitions
+
+| Token | Duration | Typical use |
+|-------|----------|-------------|
+| `flash` | 400ms | trigger, notify, get resource |
+| `quick` | 800ms | simple task, status post, semver bump |
+| `steady` | 1400ms | build, publish, changelog |
+| `slow` | 2200ms | test suite, compile+test |
+| `crawl` | 3000ms | security scan, heavy analysis |
+
+### Usage
+
+```javascript
+// Using timing token (preferred)
+{ name: 'compile-and-test', timing: 'slow',
+  steps: [ /* ... */ ]
+}
+
+// Gate timing token
+{ name: 'review-gate', timing: 'quick', gate: 'approval', gateTiming: 'slow',
+  gateActor: 'Reviewers', gateActorColor: '#f472b6',
+  steps: [ /* ... */ ]
+}
+
+// Raw duration override (still works, takes precedence)
+{ name: 'custom-job', duration: 1750,
+  steps: [ /* ... */ ]
+}
+```
+
+### Resolution order
+
+1. `job.duration` (raw ms) — highest priority
+2. `TIMING_TOKENS[job.timing]` — semantic token lookup
+3. `300 + stepCount * 480` — auto-calculated fallback
+
+For gate delays:
+1. `job.gateDelay` (raw ms) — highest priority
+2. `TIMING_TOKENS[job.gateTiming]` — semantic token lookup
+3. `2000` — default fallback
+
+### Backward compatibility
+
+Existing scenarios using `duration:` directly continue to work unchanged. The token system is additive — no breaking changes.
+
+---
+
 ## Tips
 
 - **Keep `duration` values realistic** — longer tasks = longer `duration`

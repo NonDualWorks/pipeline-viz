@@ -58,6 +58,17 @@ const RC_COLORS = {
   unknown: '#71717a',
 }
 
+// ── TIMING TOKENS ─────────────────────────────────────────────────
+// Semantic duration tokens — jobs use timing:'slow' instead of duration:2200
+// Raw duration still works as an override: duration takes precedence over timing
+const TIMING_TOKENS = {
+  flash:   400,   // trigger, notify, get resource
+  quick:   800,   // simple task, status post, semver bump
+  steady: 1400,   // build, publish, changelog
+  slow:   2200,   // test suite, compile+test
+  crawl:  3000,   // security scan, heavy analysis
+}
+
 // ── TIMING DEFAULTS ───────────────────────────────────────────────
 const T = {
   jobStart:    0.3,   // s — job header color transition
@@ -352,12 +363,12 @@ export class PipelineAnimator {
       })
 
       const stepCount  = job.steps?.length || 0
-      const jobDur     = (job.duration || (300 + stepCount * 480)) / 1000  // convert ms→s
+      const jobDur     = (job.duration || TIMING_TOKENS[job.timing] || (300 + stepCount * 480)) / 1000  // convert ms→s
       const failAtStep = job.failAtStep ?? -1
       const isRollback = !!job.triggeredByFailure
 
       // Gate delay extends the job timeline
-      const gateDelaySec = job.gate ? (job.gateDelay || 2000) / 1000 : 0
+      const gateDelaySec = job.gate ? (job.gateDelay || TIMING_TOKENS[job.gateTiming] || 2000) / 1000 : 0
       const runStart = jstart + gateDelaySec
 
       // ── Pending ──────────────────────────────────────────────────

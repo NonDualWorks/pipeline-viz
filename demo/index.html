@@ -390,7 +390,17 @@ SCENARIOS['dj-gate-reject'] = { ...DJ_BASE, name:'dj-gate-rejected',
 SCENARIOS['dj-test-fail'] = { ...DJ_BASE, name:'dj-test-fails',
   jobs: DJ_BASE.jobs.map(j => j.name==='unit-tests' ? {...j, failAtStep:1} : j) }
 
-// ── JAVA LIBRARY PUBLISH SCENARIOS (zones + gateActor + gate vocabulary) ──
+// ── TIMING TOKENS ──────────────────────────────────────────
+// Semantic duration tokens — jobs use timing:'slow' instead of duration:2200
+const TIMING_TOKENS = {
+  flash:   400,   // trigger, notify, get resource
+  quick:   800,   // simple task, status post, semver bump
+  steady: 1400,   // build, publish, changelog
+  slow:   2200,   // test suite, compile+test
+  crawl:  3000,   // security scan, heavy analysis
+}
+
+// ── JAVA LIBRARY PUBLISH SCENARIOS (zones + gateActor + timing tokens) ──
 const JL_BASE = {
   name:'java-lib-publish', team:'platform', color:'#a78bfa',
   zones:[
@@ -399,50 +409,50 @@ const JL_BASE = {
   ],
   jobs:[
     // ── PR ZONE ──
-    { name:'pr-triggered', zone:'pr', duration:600,
+    { name:'pr-triggered', zone:'pr', timing:'flash',
       steps:[
         {label:'get: source',type:'resource',resource_type:'git'},
       ]},
     { name:'compile-and-test', zone:'pr', parallelGroup:'checks', row:0,
-      depends_on:['pr-triggered'], duration:2200,
+      depends_on:['pr-triggered'], timing:'slow',
       steps:[
         {label:'task: gradle build',type:'task'},
         {label:'task: unit tests',type:'task'},
         {label:'task: test report',type:'task'},
       ]},
     { name:'code-quality', zone:'pr', parallelGroup:'checks', row:1,
-      depends_on:['pr-triggered'], duration:1600,
+      depends_on:['pr-triggered'], timing:'steady',
       steps:[
         {label:'task: checkstyle',type:'task'},
         {label:'task: spotbugs',type:'task'},
       ]},
     { name:'publish-snapshot', zone:'pr',
-      depends_on:['compile-and-test','code-quality'], duration:1400,
+      depends_on:['compile-and-test','code-quality'], timing:'steady',
       steps:[
         {label:'task: gradle publish',type:'task'},
         {label:'put: snapshot-jar',type:'resource',resource_type:'s3'},
       ]},
     { name:'report-status', zone:'pr', parallelGroup:'verify', row:0,
-      depends_on:['publish-snapshot'], duration:600,
+      depends_on:['publish-snapshot'], timing:'flash',
       steps:[
         {label:'task: POST status \u2192 SCM',type:'task'},
       ]},
     { name:'security-scan', zone:'pr', parallelGroup:'verify', row:1,
-      depends_on:['publish-snapshot'], duration:2000,
+      depends_on:['publish-snapshot'], timing:'crawl',
       steps:[
         {label:'task: trigger scan API',type:'task'},
         {label:'task: poll results',type:'task'},
       ]},
     { name:'review-gate', zone:'pr',
       depends_on:['report-status','security-scan'],
-      duration:1000, gate:'approval', gateDelay:2500,
+      timing:'quick', gate:'approval', gateTiming:'slow',
       gateActor:'Reviewers', gateActorColor:'#f472b6',
       steps:[
         {label:'gate: code review',type:'gate'},
         {label:'task: review checklist',type:'task'},
       ]},
     { name:'consumer-test', zone:'pr',
-      depends_on:['review-gate'], duration:1800,
+      depends_on:['review-gate'], timing:'slow',
       steps:[
         {label:'get: snapshot-jar',type:'resource',resource_type:'s3'},
         {label:'task: include in downstream',type:'task'},
@@ -450,53 +460,53 @@ const JL_BASE = {
       ]},
     { name:'merge-approval', zone:'pr',
       depends_on:['consumer-test'],
-      duration:800, gate:'approval', gateDelay:2000,
+      timing:'quick', gate:'approval', gateTiming:'steady',
       gateActor:'CODEOWNERS', gateActorColor:'#60a5fa',
       steps:[
         {label:'gate: team approval',type:'gate'},
       ]},
     // ── RELEASE ZONE ──
     { name:'merge-triggered', zone:'release',
-      depends_on:['merge-approval'], duration:600,
+      depends_on:['merge-approval'], timing:'flash',
       steps:[
         {label:'get: source (main)',type:'resource',resource_type:'git'},
       ]},
     { name:'rebase-check', zone:'release',
-      depends_on:['merge-triggered'], duration:800,
+      depends_on:['merge-triggered'], timing:'quick',
       steps:[
         {label:'task: check rebase needed',type:'task'},
         {label:'task: fast-forward merge',type:'task'},
       ]},
     { name:'release-build', zone:'release', parallelGroup:'release-prep', row:0,
-      depends_on:['rebase-check'], duration:2400,
+      depends_on:['rebase-check'], timing:'slow',
       steps:[
         {label:'task: gradle build',type:'task'},
         {label:'task: full test suite',type:'task'},
       ]},
     { name:'changelog', zone:'release', parallelGroup:'release-prep', row:1,
-      depends_on:['rebase-check'], duration:1000,
+      depends_on:['rebase-check'], timing:'quick',
       steps:[
         {label:'task: generate changelog',type:'task'},
       ]},
     { name:'set-semver', zone:'release',
-      depends_on:['release-build','changelog'], duration:600,
+      depends_on:['release-build','changelog'], timing:'flash',
       steps:[
         {label:'task: determine bump',type:'task'},
         {label:'task: set version',type:'task'},
       ]},
     { name:'publish-release', zone:'release',
-      depends_on:['set-semver'], duration:1400,
+      depends_on:['set-semver'], timing:'steady',
       steps:[
         {label:'task: gradle publish',type:'task'},
         {label:'put: release-jar',type:'resource',resource_type:'s3'},
       ]},
     { name:'notify-teams', zone:'release', fanOutGroup:'post-release', row:0,
-      depends_on:['publish-release'], duration:600,
+      depends_on:['publish-release'], timing:'flash',
       steps:[
         {label:'put: slack',type:'resource',resource_type:'notify'},
       ]},
     { name:'tag-release', zone:'release', fanOutGroup:'post-release', row:1,
-      depends_on:['publish-release'], duration:800,
+      depends_on:['publish-release'], timing:'quick',
       steps:[
         {label:'task: git tag',type:'task'},
         {label:'task: push tag',type:'task'},
@@ -855,12 +865,12 @@ function buildTimeline(comp, jobs, mode, speed, replayDelay, onDone) {
       const di=jmap[dep]; if(di!==undefined&&jEnd[di]!==undefined) jstart=Math.max(jstart,jEnd[di]+0.3)
     }
     const sc=job.steps?.length||0
-    const jdur=(job.duration||(300+sc*480))/1000
+    const jdur=(job.duration||TIMING_TOKENS[job.timing]||(300+sc*480))/1000
     const failAt=job.failAtStep??-1
     const isRb=!!job.triggeredByFailure
 
     // Gate delay extends the job timeline
-    const gateDelaySec=job.gate?(job.gateDelay||2000)/1000:0
+    const gateDelaySec=job.gate?(job.gateDelay||TIMING_TOKENS[job.gateTiming]||2000)/1000:0
     const runStart=jstart+gateDelaySec
     jEnd[ji]=jstart+gateDelaySec+jdur
 
